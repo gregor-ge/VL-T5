@@ -1171,7 +1171,7 @@ if __name__ == "__main__":
         comment = '_'.join(comments)
 
         from datetime import datetime
-        current_time = datetime.now().strftime('%b%d_%H-%M')
+        current_time = datetime.now().strftime('%y-%m-%d-%H%M')
         run_name = f'{current_time}_GPU{args.world_size}'
         if len(comments) > 0:
             run_name += f'_{comment}'

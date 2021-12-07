@@ -68,6 +68,8 @@ def parse_args(parse=True, **optional_kwargs):
     parser.add_argument('--train_topk', type=int, default=-1)
     parser.add_argument('--valid_topk', type=int, default=-1)
 
+    parser.add_argument('--preload', action='store_true')
+
     # Checkpoint
     parser.add_argument('--output', type=str, default='snap/test')
     parser.add_argument('--load', type=str, default=None, help='Load the model (usually the fine-tuned model).')
@@ -78,7 +80,7 @@ def parse_args(parse=True, **optional_kwargs):
     parser.add_argument('--fp16', action='store_true')
     parser.add_argument("--distributed", action='store_true')
     parser.add_argument("--num_workers", default=0, type=int)
-    parser.add_argument('--local_rank', type=int, default=-1)
+    parser.add_argument('--local_rank', type=int, default=0)
 
     # Model Config
     parser.add_argument('--backbone', type=str, default='t5-base')
@@ -97,6 +99,13 @@ def parse_args(parse=True, **optional_kwargs):
     parser.add_argument('--max_n_boxes', type=int, default=36)
     parser.add_argument('--max_text_length', type=int, default=20)
 
+    # Adapter Config
+    parser.add_argument('--adapters', action='store_true')
+    parser.add_argument('--train_adapter', type=str, default='mm_pretrain')
+    parser.add_argument('--load_adapter', type=str, default=None)
+    parser.add_argument('--load_adapter_path', type=str, default=None)
+    parser.add_argument('--reduction_factor', type=int, default=16)
+    parser.add_argument('--unfreeze_ve', action='store_true')
     # Training
     parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--valid_batch_size', type=int, default=None)

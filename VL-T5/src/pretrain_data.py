@@ -290,6 +290,70 @@ class PretrainDataset(Dataset):
 
         }
 
+        if args.preload:
+            self.source_to_h5 = {
+                'mscoco_resplit_val': coco_dir.joinpath('features').joinpath('converted_resplit_val_obj36.h5'),
+                'mscoco_resplit_train_train2014': coco_dir.joinpath('features').joinpath('converted_train2014_obj36.h5'),
+                'mscoco_resplit_train_val2014': coco_dir.joinpath('features').joinpath('converted_val2014_obj36.h5'),
+                'vgnococo': vg_dir.joinpath('features').joinpath('converted_vg_gqa_obj36.h5'),
+
+            }
+            unique_ids = {k: set() for k in self.source_to_h5.keys()}
+            for datum in data:
+                img_id = datum['img_id']
+                ids = unique_ids[datum["img_source"]]
+                if img_id not in ids:
+                    ids.add(img_id)
+
+            source_to_h5 = {
+                'mscoco_resplit_train_train2014': dict(),
+                'mscoco_resplit_train_val2014': dict(),
+                'mscoco_resplit_val': dict(),
+                'vgnococo': dict(),
+            }
+            for source in unique_ids.keys():
+                if len(unique_ids[source]) == 0:
+                    continue
+                ids = unique_ids[source]
+                d = source_to_h5[source]
+                f = self.source_to_h5[source]
+                if isinstance(f, Path):
+                    path = self.source_to_h5[source]
+                    f = h5py.File(path, 'r', )
+                    self.source_to_h5[source] = f
+
+                for i in tqdm(range(0, len(f["img_id"]), 1000), desc="Preloading "+source):
+                    max_j = 0
+                    idx_and_ids = []
+                    for j, img_id in enumerate(f["img_id"][i:i+1000]):
+                        img_id = img_id.decode()
+                        if img_id not in ids:
+                            continue
+                        max_j = j+1
+                        idx_and_ids.append((j, img_id))
+                    if max_j == 0:
+                        continue
+                    obj_id = f["obj_id"][i:i+max_j]
+                    attr_id = f["attr_id"][i:i+max_j]
+                    features = f["features"][i:i+max_j]
+                    img_h = f["img_h"][i:i+max_j]
+                    img_w = f["img_w"][i:i+max_j]
+                    boxes = f["boxes"][i:i+max_j]
+                    for j, img_id in idx_and_ids:
+                        d[f'{img_id}/obj_id'] = obj_id[j]
+                        d[f'{img_id}/attr_id'] = attr_id[j]
+                        d[f'{img_id}/features'] = features[j]
+                        d[f'{img_id}/img_h'] = img_h[j]
+                        d[f'{img_id}/img_w'] = img_w[j]
+                        d[f'{img_id}/boxes'] = boxes[j]
+                    # d[f'{img_id}/obj_id'] = f[f'{img_id}/obj_id'][()]
+                    # d[f'{img_id}/attr_id'] = f[f'{img_id}/attr_id'][()]
+                    # d[f'{img_id}/features'] = f[f'{img_id}/features'][()]
+                    # d[f'{img_id}/img_h'] = f[f'{img_id}/img_h'][()]
+                    # d[f'{img_id}/img_w'] = f[f'{img_id}/img_w'][()]
+                    # d[f'{img_id}/boxes'] = f[f'{img_id}/boxes'][()]
+            self.source_to_h5 = source_to_h5
+
         self.n_boxes = args.n_boxes
 
         if 't5' in self.args.backbone:
@@ -497,9 +561,10 @@ class PretrainDataset(Dataset):
 
             out_dict['loss_weight'] = loss_weight
 
-            feats = np.zeros(shape=(self.n_boxes, 2048), dtype=np.float32)
+            # feats = np.zeros(shape=(self.n_boxes, 2048), dtype=np.float32)
             try:
-                f[f'{img_id}/features'].read_direct(feats)
+                # f[f'{img_id}/features'].read_direct(feats)
+                feats = f[f'{img_id}/features'][()]
             except KeyError:
                 print(uid)
                 print(source)
@@ -515,9 +580,9 @@ class PretrainDataset(Dataset):
             boxes = f[f'{img_id}/boxes'][()]  # (x1, y1, x2, y2)
             boxes[:, (0, 2)] /= img_w
             boxes[:, (1, 3)] /= img_h
-            np.testing.assert_array_less(boxes, 1+1e-5)
+            #np.testing.assert_array_less(boxes, 1+1e-5)
             # np.testing.assert_array_less(boxes, 1+5e-2)
-            np.testing.assert_array_less(-boxes, 0+1e-5)
+            #np.testing.assert_array_less(-boxes, 0+1e-5)
             boxes = torch.from_numpy(boxes)
             boxes.clamp_(min=0.0, max=1.0)
             out_dict['boxes'] = boxes
@@ -693,9 +758,10 @@ class PretrainDataset(Dataset):
 
             out_dict['loss_weight'] = loss_weight
 
-            feats = np.zeros(shape=(self.n_boxes, 2048), dtype=np.float32)
+            #feats = np.zeros(shape=(self.n_boxes, 2048), dtype=np.float32)
             try:
-                f[f'{img_id}/features'].read_direct(feats)
+                #f[f'{img_id}/features'].read_direct(feats)
+                feats = f[f'{img_id}/features'][()]
             except KeyError:
                 print(uid)
                 print(source)
@@ -711,9 +777,9 @@ class PretrainDataset(Dataset):
             boxes = f[f'{img_id}/boxes'][()]  # (x1, y1, x2, y2)
             boxes[:, (0, 2)] /= img_w
             boxes[:, (1, 3)] /= img_h
-            np.testing.assert_array_less(boxes, 1+1e-5)
+            #np.testing.assert_array_less(boxes, 1+1e-5)
             # np.testing.assert_array_less(boxes, 1+5e-2)
-            np.testing.assert_array_less(-boxes, 0+1e-5)
+            #np.testing.assert_array_less(-boxes, 0+1e-5)
             boxes = torch.from_numpy(boxes)
             boxes.clamp_(min=0.0, max=1.0)
             out_dict['boxes'] = boxes

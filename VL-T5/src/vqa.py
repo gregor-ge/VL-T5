@@ -33,7 +33,7 @@ _use_apex = False
 
 # Check if Pytorch version >= 1.6 to switch between Native AMP and Apex
 if version.parse(torch.__version__) < version.parse("1.6"):
-    from transormers.file_utils import is_apex_available
+    from transformers.file_utils import is_apex_available
     if is_apex_available():
         from apex import amp
     _use_apex = True
@@ -454,7 +454,7 @@ if __name__ == "__main__":
         comment = '_'.join(comments)
 
         from datetime import datetime
-        current_time = datetime.now().strftime('%b%d_%H-%M')
+        current_time = datetime.now().strftime('%y-%m-%d-%H%M')
 
         run_name = f'{current_time}_GPU{args.world_size}'
         if len(comments) > 0:

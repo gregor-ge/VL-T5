@@ -133,7 +133,7 @@ class Trainer(TrainerBase):
             src_dir = Path(__file__).resolve().parent
             base_path = str(src_dir.parent)
             src_dir = str(src_dir)
-            wandb.save(os.path.join(src_dir + "/*.py"), base_path=base_path)
+            #wandb.save(os.path.join(src_dir + "/*.py"), base_path=base_path)
 
         if self.args.distributed:
             dist.barrier()
@@ -147,6 +147,7 @@ class Trainer(TrainerBase):
 
             # Train
             self.model.train()
+            self.train_adapters()
 
             if self.verbose:
                 pbar = tqdm(total=len(self.train_loader), ncols=250)
@@ -183,29 +184,38 @@ class Trainer(TrainerBase):
                 loss = loss.detach()
 
                 # Update Parameters
-                if self.args.clip_grad_norm > 0:
-                    if self.args.fp16 and _use_native_amp:
-                        self.scaler.unscale_(self.optim)
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad_norm)
-                    elif self.args.fp16 and _use_apex:
-                        torch.nn.utils.clip_grad_norm_(amp.master_params(self.optim), self.args.clip_grad_norm)
+                update = True
+                if self.args.gradient_accumulation_steps > 1:
+                    if step_i == 0:
+                        update = False
+                    elif step_i % self.args.gradient_accumulation_steps == 0 or step_i == len(self.train_loader) - 1:
+                        update = True
                     else:
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad_norm)
+                        update = False
+                if update:
+                    if self.args.clip_grad_norm > 0:
+                        if self.args.fp16 and _use_native_amp:
+                            self.scaler.unscale_(self.optim)
+                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad_norm)
+                        elif self.args.fp16 and _use_apex:
+                            torch.nn.utils.clip_grad_norm_(amp.master_params(self.optim), self.args.clip_grad_norm)
+                        else:
+                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad_norm)
 
-                if self.args.fp16 and _use_native_amp:
-                    self.scaler.step(self.optim)
-                    self.scaler.update()
-                else:
-                    self.optim.step()
+                    if self.args.fp16 and _use_native_amp:
+                        self.scaler.step(self.optim)
+                        self.scaler.update()
+                    else:
+                        self.optim.step()
 
-                if self.lr_scheduler:
-                    self.lr_scheduler.step()
+                    if self.lr_scheduler:
+                        self.lr_scheduler.step()
 
-                # self.model.zero_grad()
-                for param in self.model.parameters():
-                    param.grad = None
+                    # self.model.zero_grad()
+                    for param in self.model.parameters():
+                        param.grad = None
 
-                global_step += 1
+                    global_step += 1
 
                 if self.lr_scheduler:
                     if version.parse(torch.__version__) >= version.parse("1.4"):
@@ -239,10 +249,19 @@ class Trainer(TrainerBase):
                     pbar.set_description(desc_str)
                     pbar.update(1)
 
+                    if global_step > 0 and global_step % 10 == 0:
+                        for name, loss in epoch_results.items():
+                            if name[-4:] == 'loss':
+                                loss_count = int(epoch_results[name + '_count'])
+                                if loss_count > 0:
+                                    avg_loss = loss / loss_count
+                                    wandb.log({f'Train Loss/{name}': avg_loss}, step=global_step)
+
             if self.verbose:
                 pbar.close()
 
-            dist.barrier()
+            if self.args.distributed:
+                dist.barrier()
 
             results = reduce_dict(epoch_results, average=False)
             if self.verbose:
@@ -251,19 +270,19 @@ class Trainer(TrainerBase):
 
                 avg_train_loss = train_loss / train_loss_count
                 losses_str = f"Train Loss: {avg_train_loss:.3f}\n"
-
                 for name, loss in results.items():
                     if name[-4:] == 'loss':
                         loss_count = int(results[name+'_count'])
                         if loss_count > 0:
                             avg_loss = loss/loss_count
                             losses_str += f"{name} ({loss_count}): {avg_loss:.3f} "
-                            wandb.log({f'Train Loss/{name}': avg_loss}, step=epoch)
+                            wandb.log({f'Train Loss/{name}': avg_loss}, step=global_step)
 
                 losses_str += '\n'
                 print(losses_str)
 
-            dist.barrier()
+            if self.args.distributed:
+                dist.barrier()
 
             # Validation
             valid_results, valid_uid2ans = self.evaluate_epoch(epoch=epoch)
@@ -275,14 +294,13 @@ class Trainer(TrainerBase):
 
                 avg_valid_loss = valid_loss / valid_loss_count
                 losses_str = f"Valid Loss: {avg_valid_loss:.3f}\n"
-
                 for name, loss in valid_results.items():
                     if name[-4:] == 'loss':
                         loss_count = int(valid_results[name+'_count'])
                         if loss_count > 0:
                             avg_loss = loss / loss_count
                             losses_str += f"{name} ({loss_count}): {avg_loss:.3f} "
-                            wandb.log({f'Valid Loss/{name}': avg_loss}, step=epoch)
+                            wandb.log({f'Valid Loss/{name}': avg_loss}, step=global_step)
 
                 losses_str += '\n'
                 print(losses_str)
@@ -316,7 +334,8 @@ class Trainer(TrainerBase):
                     print(accu_str)
                     accu_str += '\n\n'
 
-            dist.barrier()
+            if self.args.distributed:
+                dist.barrier()
 
             if self.verbose:
                 # Save
@@ -325,7 +344,8 @@ class Trainer(TrainerBase):
                 #     self.save("BEST_EVAL_LOSS")
                 self.save("Epoch%02d" % (epoch + 1))
 
-            dist.barrier()
+            if self.args.distributed:
+                dist.barrier()
 
         if self.verbose:
             wandb.log({'finished': True})
@@ -379,11 +399,13 @@ class Trainer(TrainerBase):
 
                     pbar.set_description(desc_str)
                     pbar.update(1)
-                dist.barrier()
+                if self.args.distributed:
+                    dist.barrier()
 
             if self.verbose:
                 pbar.close()
-            dist.barrier()
+            if self.args.distributed:
+                dist.barrier()
 
             if 'qa' not in self.args.losses:
                 uid2ans = None
@@ -452,7 +474,7 @@ if __name__ == "__main__":
     comment = '_'.join(comments)
 
     from datetime import datetime
-    current_time = datetime.now().strftime('%b%d_%H-%M')
+    current_time = datetime.now().strftime('%y-%m-%d-%H%M')
 
     project_dir = Path(__file__).resolve().parent.parent
 
@@ -462,5 +484,5 @@ if __name__ == "__main__":
             run_name += f'_{comment}'
         args.run_name = run_name
 
-    if args.distributed:
-        main_worker(args.local_rank, args)
+    #if args.distributed:
+    main_worker(args.local_rank, args)

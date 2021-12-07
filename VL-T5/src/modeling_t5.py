@@ -227,6 +227,7 @@ class JointEncoder(T5Stack):
 
         # Prepare head mask if needed
         head_mask = self.get_head_mask(head_mask, self.config.num_layers)
+        cross_attn_head_mask = self.get_head_mask(None, self.config.num_layers)
         present_key_value_states = () if use_cache else None
         all_hidden_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
@@ -275,13 +276,18 @@ class JointEncoder(T5Stack):
                     encoder_hidden_states=None,
                     encoder_attention_mask=None,
                     encoder_decoder_position_bias=None,
-                    head_mask=head_mask[i],
+                    layer_head_mask=head_mask[i],
+                    cross_attn_layer_head_mask=cross_attn_head_mask[i],
                     past_key_value=past_key_value,
                     use_cache=use_cache,
                     output_attentions=output_attentions,
                 )
+
                 # layer_outputs is a tuple with:
-                # hidden-states, key-value-states, (self-attention weights), (self-attention position bias), (cross-attention weights), (cross-attention position bias)
+                # hidden-states, key-value-states, (self-attention position bias), (self-attention weights), (cross-attention position bias), (cross-attention weights)
+                if not use_cache:
+                    layer_outputs = layer_outputs[:1] + (None,) + layer_outputs[1:]
+
                 hidden_states, present_key_value_state = layer_outputs[:2]
 
                 # We share the position biases between the layers - the first layer store them
@@ -351,6 +357,7 @@ class VLT5(T5ForConditionalGeneration):
         encoder_config.is_decoder = False
         encoder_config.use_cache = False
         encoder_config.is_encoder_decoder = False
+        encoder_config.adapters = config.adapters
 
         #---- Modified ----#
         # self.encoder = T5Stack(encoder_config, self.shared)
@@ -360,6 +367,7 @@ class VLT5(T5ForConditionalGeneration):
         decoder_config = copy.deepcopy(config)
         decoder_config.is_decoder = True
         decoder_config.is_encoder_decoder = False
+        decoder_config.adapters = config.adapters
 
         self.decoder = T5Stack(decoder_config, self.shared)
 
