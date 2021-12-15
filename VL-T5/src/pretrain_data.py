@@ -172,7 +172,7 @@ def get_datum(datum):
 
 
 class PretrainDataset(Dataset):
-    def __init__(self, split='vg', rank=-1, topk=-1, verbose=True, args=None, is_train=True):
+    def __init__(self, split='vg', rank=(-1, -1), topk=-1, verbose=True, args=None, is_train=True):
 
         self.topk = topk
         self.verbose = verbose
@@ -241,6 +241,12 @@ class PretrainDataset(Dataset):
             if self.verbose:
                 print(f"Use only {self.topk} data")
 
+        if args.distributed and args.preload:
+            gpu, world_size = rank
+            data = data[gpu*(len(data)//world_size):(gpu+1)*(len(data)//world_size)]
+            print(f"Distributed training, processing {len(data)} data")
+
+
         if 'qa' in args.losses:
             self.evaluator = QAEvaluator(data)
 
@@ -265,7 +271,7 @@ class PretrainDataset(Dataset):
         self.data = data
         self.n_data = len(self.data)
 
-        if self.verbose and is_train:
+        if is_train:
             from collections import Counter
             task_counter = Counter()
             for datum in data:
@@ -279,8 +285,7 @@ class PretrainDataset(Dataset):
             for k, v in task_counter.items():
                 print(k, f'{v/len(data)*100:.1f}%')
 
-        if self.verbose:
-            print("# examples:", len(data))
+        print("# examples:", len(data), " rank ", rank)
 
         self.source_to_h5 = {
             'mscoco_resplit_train_train2014': coco_dir.joinpath('features').joinpath('train2014_obj36.h5'),
@@ -871,14 +876,14 @@ def get_loader(args, split='vgnococo', mode='train',
     verbose = (gpu == 0)
     dataset = PretrainDataset(
         split,
-        rank=gpu,
+        rank=(gpu, args.world_size),
         topk=topk,
         verbose=verbose,
         args=args,
         is_train=(mode == 'train'),
         )
 
-    if distributed:
+    if distributed and not args.preload:
         sampler = DistributedSampler(dataset)
     else:
         sampler = None

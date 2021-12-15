@@ -73,6 +73,7 @@ class Trainer(TrainerBase):
         elif 'bart' in self.args.tokenizer:
             self.model.resize_token_embeddings(self.model.model.shared.num_embeddings + num_added_toks)
 
+
         self.model.tokenizer = self.tokenizer
 
         # Load Checkpoint
@@ -139,11 +140,16 @@ class Trainer(TrainerBase):
             dist.barrier()
 
         global_step = 0
+        if self.start_epoch is not None:
+            global_step = self.start_epoch * len(self.train_loader) // self.args.gradient_accumulation_steps
         for epoch in range(self.args.epochs):
             if self.start_epoch is not None:
                 epoch += self.start_epoch
             if self.args.distributed:
-                self.train_loader.sampler.set_epoch(epoch)
+                try:
+                    self.train_loader.sampler.set_epoch(epoch)
+                except AttributeError:
+                    pass
 
             # Train
             self.model.train()
@@ -326,11 +332,11 @@ class Trainer(TrainerBase):
                     for dset in dset2cnt:
                         dset2accu[dset] = dset2score[dset] / dset2cnt[dset]
                     accu_str = "Overall QA Acc %0.4f" % (accu)
-                    wandb.log({f'Valid QA Acc/Overall': accu}, step=epoch)
+                    wandb.log({f'Valid QA Acc/Overall': accu}, step=global_step)
                     sorted_keys = sorted(dset2accu.keys())
                     for key in sorted_keys:
                         accu_str += ", %s Acc %0.4f" % (key, dset2accu[key])
-                        wandb.log({f'Valid QA Acc/{key}': dset2accu[key]}, step=epoch)
+                        wandb.log({f'Valid QA Acc/{key}': dset2accu[key]}, step=global_step)
                     print(accu_str)
                     accu_str += '\n\n'
 

@@ -105,11 +105,11 @@ class TrainerBase(object):
         if self.args.adapters:
             print("Adding adapter ", self.args.train_adapter)
             model.add_adapter(self.args.train_adapter,
-                              config=AdapterConfig.load("pfeiffer", reduction_factor=self.args.reduction_factor))
+                              config=AdapterConfig.load(self.args.adapter_architecture, reduction_factor=self.args.reduction_factor))
 
             if self.args.load_adapter:
                 print("Loading adapter from ", self.args.load_adapter_path, " as ", self.args.load_adapter)
-                self.model.load_adapter(self.args.load_adapter_path, load_as=self.args.load_adapter)
+                model.load_adapter(self.args.load_adapter_path, load_as=self.args.load_adapter, with_head=False)
         return model
 
     def set_active_adapters(self):
@@ -120,19 +120,31 @@ class TrainerBase(object):
         else:
             adapters = self.args.train_adapter
         print("Active adapters: ", adapters)
-        self.model.set_active_adapters(adapters)
+        try:
+            self.model.set_active_adapters(adapters)
+        except:
+            self.model.module.set_active_adapters(adapters)
 
     def train_adapters(self):
         if not self.args.adapters:
             return
         print("Training adapter ", self.args.train_adapter)
-        self.model.train_adapter(self.args.train_adapter)
+
+        if self.args.distributed:
+            model = self.model.module
+        else:
+            model = self.model
+
+        model.train_adapter(self.args.train_adapter)
 
         if self.args.unfreeze_ve:
             print("Unfreezing VisionEmbedding")
-            for param in self.model.encoder.visual_embedding.parameters():
+            for name, param in model.encoder.visual_embedding.named_parameters():
+                if "obj_order_embedding" in name:
+                    print("Not unfreezing obj_order_embedding (it is tied with lm_head and embedding)")
+                    continue
                 param.requires_grad = True
-
+        print("lm_head requires grad: ", *(p.requires_grad for p in model.lm_head.parameters()), *(p.requires_grad for p in model.shared.parameters()))
         self.set_active_adapters()
 
     def create_tokenizer(self, **kwargs):
@@ -200,6 +212,11 @@ class TrainerBase(object):
             optim = self.args.optimizer(
                 list(self.model.parameters()), self.args.lr)
 
+        if self.args.resume and self.args.load is not None:
+            state_dict = torch.load(self.args.load + "_optim.pth")
+            optim.load_state_dict(state_dict["optim"])
+            lr_scheduler.load_state_dict(state_dict["lr_scheduler"])
+
         return optim, lr_scheduler
 
     def load_checkpoint(self, ckpt_path):
@@ -223,7 +240,7 @@ class TrainerBase(object):
             if ckpt_path.endswith(".pth"):
                 ckpt_path = ckpt_path[:-4]
             print('Adapter loaded from ', ckpt_path)
-            self.model.load_adapter(ckpt_path, load_as=self.args.train_adapter)
+            self.model.load_adapter(ckpt_path, load_as=self.args.train_adapter, with_head=False)
             self.set_active_adapters()
 
     def init_weights(self):
@@ -252,12 +269,21 @@ class TrainerBase(object):
         if not os.path.isdir(self.args.output):
             os.makedirs(self.args.output, exist_ok=True)
         if self.args.adapters:
-            state_dict = self.model.encoder.visual_embedding.state_dict()
-            state_dict = {"module.encoder.visual_embedding."+k: v for k,v in state_dict.items()}
-            torch.save(state_dict, os.path.join(self.args.output, "%s.pth" % name))
-            self.model.save_adapter(os.path.join(self.args.output, name), self.args.train_adapter)
+            if self.args.distributed:
+                state_dict = self.model.module.encoder.visual_embedding.state_dict()
+                state_dict = {"module.encoder.visual_embedding." + k: v for k, v in state_dict.items()}
+                torch.save(state_dict, os.path.join(self.args.output, "%s.pth" % name))
+                self.model.module.save_adapter(os.path.join(self.args.output, name), self.args.train_adapter, with_head=False)
+            else:
+                state_dict = self.model.encoder.visual_embedding.state_dict()
+                state_dict = {"module.encoder.visual_embedding."+k: v for k,v in state_dict.items()}
+                torch.save(state_dict, os.path.join(self.args.output, "%s.pth" % name))
+                self.model.save_adapter(os.path.join(self.args.output, name), self.args.train_adapter, with_head=False)
         else:
             torch.save(self.model.state_dict(), os.path.join(self.args.output, "%s.pth" % name))
+        if self.args.save_optim:
+            print("Saving optimizer and lr schedule to ", os.path.join(self.args.output, "%s_optim.pth" % name))
+            torch.save({"optim": self.optim.state_dict(), "lr_scheduler": self.lr_scheduler.state_dict()}, os.path.join(self.args.output, "%s_optim.pth" % name))
 
     def load(self, path, loc=None):
         if loc is None and hasattr(self.args, 'gpu'):
@@ -280,5 +306,5 @@ class TrainerBase(object):
             pprint(results)
         if self.args.adapters:
             print('Adapter loaded from ', path)
-            self.model.load_adapter(path, load_as=self.args.train_adapter)
+            self.model.load_adapter(path, load_as=self.args.train_adapter, with_head=False)
             self.set_active_adapters()

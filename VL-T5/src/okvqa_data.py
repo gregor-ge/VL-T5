@@ -180,7 +180,7 @@ class VQAFineTuneDataset(Dataset):
             sent = datum['question']
 
         #input_ids = self.tokenizer.encode(f'vqa: {sent}', max_length=20, truncation=True)
-        input_ids = self.tokenizer.encode(f"question: {sent}", max_length=30, truncation=True)
+        input_ids = self.tokenizer.encode(f"question: {sent}. answer: ", max_length=30, truncation=True)
 
         question_id = datum['question_id']
         out_dict['question_id'] = question_id

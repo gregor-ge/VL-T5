@@ -69,7 +69,8 @@ def parse_args(parse=True, **optional_kwargs):
     parser.add_argument('--valid_topk', type=int, default=-1)
 
     parser.add_argument('--preload', action='store_true')
-
+    parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--save_optim', action='store_true')
     # Checkpoint
     parser.add_argument('--output', type=str, default='snap/test')
     parser.add_argument('--load', type=str, default=None, help='Load the model (usually the fine-tuned model).')
@@ -101,6 +102,7 @@ def parse_args(parse=True, **optional_kwargs):
 
     # Adapter Config
     parser.add_argument('--adapters', action='store_true')
+    parser.add_argument('--adapter_architecture', type=str, default='pfeiffer')
     parser.add_argument('--train_adapter', type=str, default='mm_pretrain')
     parser.add_argument('--load_adapter', type=str, default=None)
     parser.add_argument('--load_adapter_path', type=str, default=None)
