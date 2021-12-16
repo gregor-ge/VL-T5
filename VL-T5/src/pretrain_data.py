@@ -111,6 +111,12 @@ def get_datum(datum):
                 new_datum['label'] = None
                 data.append(new_datum)
 
+            if datum['prefix'] and labels is None:
+                new_datum = deepcopy(new_datum)
+                new_datum['task'] = 'prefix'
+                new_datum['label'] = None
+                data.append(new_datum)
+
             # Task: Image captioning
             if datum['caption']:
                 if args.caption_cocoonly:
@@ -210,6 +216,7 @@ class PretrainDataset(Dataset):
 
                     datum['lm'] = 'lm' in losses
                     datum['qa'] = 'qa' in losses
+                    datum['prefix'] = 'prefix' in losses
                     datum['ground_caption'] = 'ground_caption' in losses
                     datum['refer'] = 'refer' in losses
                     datum['itm'] = 'itm' in losses
@@ -217,6 +224,11 @@ class PretrainDataset(Dataset):
 
                     datum['backbone'] = self.args.backbone
 
+                if args.distributed and args.preload:
+                    gpu, world_size = rank
+                    original_len = len(_data)
+                    _data = _data[gpu * (len(_data) // world_size):(gpu + 1) * (len(_data) // world_size)]
+                    print(f"Distributed training, processing {len(_data)}/{original_len} images")
                 data.extend(_data)
 
         # Modify the answers
@@ -240,12 +252,6 @@ class PretrainDataset(Dataset):
             data = data[:self.topk]
             if self.verbose:
                 print(f"Use only {self.topk} data")
-
-        if args.distributed and args.preload:
-            gpu, world_size = rank
-            data = data[gpu*(len(data)//world_size):(gpu+1)*(len(data)//world_size)]
-            print(f"Distributed training, processing {len(data)} data")
-
 
         if 'qa' in args.losses:
             self.evaluator = QAEvaluator(data)
@@ -327,10 +333,10 @@ class PretrainDataset(Dataset):
                     f = h5py.File(path, 'r', )
                     self.source_to_h5[source] = f
 
-                for i in tqdm(range(0, len(f["img_id"]), 1000), desc="Preloading "+source):
+                for i in tqdm(range(0, len(f["img_id"]), 100), desc="Preloading "+source):
                     max_j = 0
                     idx_and_ids = []
-                    for j, img_id in enumerate(f["img_id"][i:i+1000]):
+                    for j, img_id in enumerate(f["img_id"][i:i+100]):
                         img_id = img_id.decode()
                         if img_id not in ids:
                             continue
@@ -338,15 +344,15 @@ class PretrainDataset(Dataset):
                         idx_and_ids.append((j, img_id))
                     if max_j == 0:
                         continue
-                    obj_id = f["obj_id"][i:i+max_j]
-                    attr_id = f["attr_id"][i:i+max_j]
+                    #obj_id = f["obj_id"][i:i+max_j]
+                    #attr_id = f["attr_id"][i:i+max_j]
                     features = f["features"][i:i+max_j]
                     img_h = f["img_h"][i:i+max_j]
                     img_w = f["img_w"][i:i+max_j]
                     boxes = f["boxes"][i:i+max_j]
                     for j, img_id in idx_and_ids:
-                        d[f'{img_id}/obj_id'] = obj_id[j]
-                        d[f'{img_id}/attr_id'] = attr_id[j]
+                        #d[f'{img_id}/obj_id'] = obj_id[j]
+                        #d[f'{img_id}/attr_id'] = attr_id[j]
                         d[f'{img_id}/features'] = features[j]
                         d[f'{img_id}/img_h'] = img_h[j]
                         d[f'{img_id}/img_w'] = img_w[j]
@@ -429,6 +435,18 @@ class PretrainDataset(Dataset):
                         if obj not in input_tokens:
                             input_tokens.append(obj)
                     source_text = ' '.join(input_tokens)
+
+            elif task == 'prefix':
+                assert text_source in ["mscoco", 'vg']
+
+                prefix = ""
+                sent = datum['sent']
+                source_text, target_text = preprocess.corrupt_prefix(
+                    sent, mask_ratio=0.5, prefix=prefix)
+
+                input_tokens = [source_text]
+
+                source_text = ' '.join(input_tokens)
 
             elif task == 'qa':
                 assert text_source in ['vqa', 'gqa', 'visual7w'], (text_source, uid)

@@ -293,6 +293,9 @@ class Trainer(TrainerBase):
             # Validation
             valid_results, valid_uid2ans = self.evaluate_epoch(epoch=epoch)
 
+            if self.args.distributed:
+                dist.barrier()
+
             valid_results = reduce_dict(valid_results, average=False)
             if self.verbose:
                 valid_loss = valid_results['total_loss']
@@ -405,8 +408,8 @@ class Trainer(TrainerBase):
 
                     pbar.set_description(desc_str)
                     pbar.update(1)
-                if self.args.distributed:
-                    dist.barrier()
+                # if self.args.distributed:
+                #     dist.barrier()
 
             if self.verbose:
                 pbar.close()

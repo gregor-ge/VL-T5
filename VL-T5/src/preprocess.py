@@ -81,6 +81,15 @@ def corrupt_spans(text, mask_ratio=0.15, prefix=None):
 
     return source_text, target_text
 
+def corrupt_prefix(input_text, mask_ratio=0.5, prefix=""):
+    tokens = input_text.split()
+
+    n_tokens = len(tokens)
+    split = random.randint(1, n_tokens-1)
+    source_text = " ".join(tokens[:split])
+    target_text = " ".join(tokens[split:])
+
+    return source_text, target_text
 
 def corrupt_bart(input_text, mask_ratio=0.30, prefix="denoise text:"):
     """BART-style Masked Language Modeling with corrupted span prediction
