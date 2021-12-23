@@ -214,7 +214,8 @@ class COCOCaptionFineTuneDataset(Dataset):
             elif self.args.prefix == 'mask':
                 if 'bart' in self.args.tokenizer:
                     prefix = "<mask>"
-
+            else:
+                prefix = self.args.prefix
             input_tokens = [prefix]
 
             if self.args.oscar_tags:

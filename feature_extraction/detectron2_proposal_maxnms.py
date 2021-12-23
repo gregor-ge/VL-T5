@@ -28,12 +28,12 @@ DIM = 2048
 data_path = 'demo/data/genome/1600-400-20'
 
 vg_classes = []
-with open(os.path.join(D2_ROOT, data_path, 'objects_vocab.txt')) as f:
+with open(os.path.join(data_path, 'objects_vocab.txt')) as f:
     for object in f.readlines():
         vg_classes.append(object.split(',')[0].lower().strip())
 
 vg_attrs = []
-with open(os.path.join(D2_ROOT, data_path, 'attributes_vocab.txt')) as f:
+with open(os.path.join(data_path, 'attributes_vocab.txt')) as f:
     for object in f.readlines():
         vg_attrs.append(object.split(',')[0].lower().strip())
 MetadataCatalog.get("vg").thing_classes = vg_classes
@@ -145,8 +145,7 @@ def doit(raw_image, predictor):
 
 def build_model():
     cfg = get_cfg()  # Renew the cfg file
-    cfg.merge_from_file(os.path.join(
-        D2_ROOT, "configs/VG-Detection/faster_rcnn_R_101_C4_attr_caffemaxpool.yaml"))
+    cfg.merge_from_file("configs/VG-Detection/faster_rcnn_R_101_C4_attr_caffemaxpool.yaml")
     cfg.MODEL.RPN.POST_NMS_TOPK_TEST = 300
     cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST = 0.6
     cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.2
@@ -154,12 +153,12 @@ def build_model():
     # cfg.INPUT.MAX_SIZE_TEST = 1000
     # cfg.MODEL.RPN.NMS_THRESH = 0.7
     # Find a model from detectron2's model zoo. You can either use the https://dl.fbaipublicfiles.... url, or use the following shorthand
-    # cfg.MODEL.WEIGHTS = "http://nlp.cs.unc.edu/models/faster_rcnn_from_caffe.pkl"
+    cfg.MODEL.WEIGHTS = "http://nlp.cs.unc.edu/models/faster_rcnn_from_caffe.pkl"
     # cfg.MODEL.WEIGHTS = "http://nlp.cs.unc.edu/models/faster_rcnn_from_caffe_attr.pkl"
     # cfg.MODEL.WEIGHTS = "~/.torch/fvcore_cache/models/faster_rcnn_from_caffe_attr.pkl"
     # Path.home().joinpath('.torch/fvcore_cache/models/faster_rcnn_from_caffe_attr.pkl').exists()
-    from pathlib import Path
-    cfg.MODEL.WEIGHTS = str(Path.home().joinpath('.torch/fvcore_cache/models/faster_rcnn_from_caffe_attr.pkl'))
+    #from pathlib import Path
+    #cfg.MODEL.WEIGHTS = str(Path.home().joinpath('.torch/fvcore_cache/models/faster_rcnn_from_caffe_attr.pkl'))
     detector = DefaultPredictor(cfg)
     return detector
 
@@ -167,14 +166,20 @@ def build_model():
 def collate_fn(batch):
     img_ids = []
     imgs = []
+    paths = []
 
     for i, entry in enumerate(batch):
         img_ids.append(entry['img_id'])
         imgs.append(entry['img'])
+        try:
+            paths.append(entry["img_path"])
+        except KeyError:
+            continue
 
     batch_out = {}
     batch_out['img_ids'] = img_ids
     batch_out['imgs'] = imgs
+    batch_out["img_path"] = paths
 
     return batch_out
 

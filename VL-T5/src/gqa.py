@@ -141,7 +141,7 @@ class Trainer(TrainerBase):
             src_dir = Path(__file__).resolve().parent
             base_path = str(src_dir.parent)
             src_dir = str(src_dir)
-            wandb.save(os.path.join(src_dir + "/*.py"), base_path=base_path)
+            #wandb.save(os.path.join(src_dir + "/*.py"), base_path=base_path)
 
         if self.args.distributed:
             dist.barrier()
@@ -155,7 +155,8 @@ class Trainer(TrainerBase):
             if self.start_epoch is not None:
                 epoch += self.start_epoch
             self.model.train()
-            if self.args.distributed:
+            self.train_adapters()
+            if self.args.distributed and not self.args.preload:
                 self.train_loader.sampler.set_epoch(epoch)
             if self.verbose:
                 pbar = tqdm(total=len(self.train_loader), ncols=120)
@@ -393,7 +394,7 @@ def main_worker(gpu, args):
         src_dir = Path(__file__).resolve().parent
         base_path = str(src_dir.parent)
         src_dir = str(src_dir)
-        wandb.save(os.path.join(src_dir + "/*.py"), base_path=base_path)
+        #wandb.save(os.path.join(src_dir + "/*.py"), base_path=base_path)
 
         wandb.save(dump_path, base_path=args.output)
         print('Uploaded', dump_path)
@@ -427,7 +428,7 @@ def main_worker(gpu, args):
             split=args.test, mode='val', batch_size=valid_batch_size,
             distributed=args.distributed, gpu=args.gpu,
             workers=4,
-            topk=args.valid_topk,
+            topk=args.test_topk,
         )
 
         trainer = Trainer(args, train_loader, val_loader, test_loader, train=True)
@@ -459,5 +460,4 @@ if __name__ == "__main__":
 
         args.run_name = run_name
 
-    if args.distributed:
-        main_worker(args.local_rank, args)
+    main_worker(args.local_rank, args)

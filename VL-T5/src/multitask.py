@@ -166,6 +166,7 @@ class Trainer(TrainerBase):
             if self.start_epoch is not None:
                 epoch += self.start_epoch
             self.model.train()
+            self.train_adapters()
 
             if self.args.distributed:
                 self.train_loader.set_epoch(epoch)
@@ -1178,5 +1179,4 @@ if __name__ == "__main__":
 
         args.run_name = run_name
 
-    if args.distributed:
-        main_worker(args.local_rank, args)
+    main_worker(args.local_rank, args)

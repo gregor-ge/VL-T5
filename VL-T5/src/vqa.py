@@ -144,7 +144,7 @@ class Trainer(TrainerBase):
             src_dir = Path(__file__).resolve().parent
             base_path = str(src_dir.parent)
             src_dir = str(src_dir)
-            wandb.save(os.path.join(src_dir + "/*.py"), base_path=base_path)
+            #wandb.save(os.path.join(src_dir + "/*.py"), base_path=base_path)
 
         if self.args.distributed:
             dist.barrier()
@@ -154,7 +154,8 @@ class Trainer(TrainerBase):
             if self.start_epoch is not None:
                 epoch += self.start_epoch
             self.model.train()
-            if self.args.distributed:
+            self.train_adapters()
+            if self.args.distributed and not self.args.preload:
                 self.train_loader.sampler.set_epoch(epoch)
             if self.verbose:
                 pbar = tqdm(total=len(self.train_loader), ncols=120)
@@ -294,7 +295,8 @@ class Trainer(TrainerBase):
             evaluator = self.test_loader.evaluator
             score_dict = evaluator.evaluate(quesid2ans)
 
-            evaluator.dump_result(quesid2ans)
+            dump_path = os.path.join(self.args.output, 'submit.json')
+            evaluator.dump_result(quesid2ans, dump_path)
 
             acc_dict_all = evaluator.evaluate_raw(quesid2ans)
             acc_dict_answerable = evaluator.evaluate_raw(quesid2ans, is_topk_optimal=True)
@@ -416,7 +418,7 @@ def main_worker(gpu, args):
         split=args.test, mode='val', batch_size=valid_batch_size,
         distributed=args.distributed, gpu=args.gpu,
         workers=4,
-        topk=args.valid_topk,
+        topk=args.test_topk,
     )
 
     trainer = Trainer(args, train_loader, val_loader, test_loader, train=True)
@@ -428,7 +430,7 @@ def main_worker(gpu, args):
             split='test', mode='val', batch_size=valid_batch_size,
             distributed=args.distributed, gpu=args.gpu,
             workers=4,
-            topk=args.valid_topk,
+            topk=args.test_topk,
         )
         trainer.submit_test_loader = submit_test_loader
 
@@ -446,9 +448,6 @@ if __name__ == "__main__":
         if args.load is not None:
             ckpt_str = "_".join(args.load.split('/')[-3:])
             comments.append(ckpt_str)
-        elif args.load_lxmert_qa is not None:
-            ckpt_str = "_".join(args.load_lxmert_qa.split('/')[-3:])
-            comments.append(ckpt_str)
         if args.comment != '':
             comments.append(args.comment)
         comment = '_'.join(comments)
@@ -462,5 +461,4 @@ if __name__ == "__main__":
 
         args.run_name = run_name
 
-    if args.distributed:
-        main_worker(args.local_rank, args)
+    main_worker(args.local_rank, args)

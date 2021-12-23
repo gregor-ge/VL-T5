@@ -1,4 +1,11 @@
 # coding=utf-8
+import clip
+import h5py
+import torch
+import torch.nn as nn
+from types import MethodType
+
+from PIL import Image
 
 from detectron2_proposal_maxnms import collate_fn, extract, NUM_OBJECTS, DIM
 from torch.utils.data import Dataset, DataLoader
@@ -6,7 +13,7 @@ import cv2
 from tqdm import tqdm
 from pathlib import Path
 import argparse
-
+import numpy as np
 
 class COCODataset(Dataset):
     def __init__(self, image_dir):
@@ -21,33 +28,91 @@ class COCODataset(Dataset):
 
     def __getitem__(self, idx):
         image_path = self.image_path_list[idx]
-        image_id = image_path.stem
+        image_id = image_path.name  #stem
 
         img = cv2.imread(str(image_path))
 
         return {
             'img_id': image_id,
-            'img': img
+            'img': img,
+            'img_path': Image.open(image_path)
         }
+
+
+def extract_clip(output_fname, dataloader, desc, clip_model, n):
+    model, preprocess = clip.load(clip_model, device="cuda")
+    vis_model = model.visual
+    def new_forward(self, x):
+        def stem(x):
+            for conv, bn in [(self.conv1, self.bn1), (self.conv2, self.bn2), (self.conv3, self.bn3)]:
+                x = self.relu(bn(conv(x)))
+            x = self.avgpool(x)
+            return x
+
+        x = x.type(self.conv1.weight.dtype)
+        x = stem(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        x = nn.AdaptiveMaxPool2d(n)(x)
+
+        return x
+    vis_model.forward = MethodType(new_forward, vis_model)
+
+    with h5py.File(output_fname, 'w') as f:
+        with torch.no_grad():
+            for i, batch in tqdm(enumerate(dataloader),
+                                 desc=desc,
+                                 ncols=150,
+                                 total=len(dataloader)):
+
+                img_ids = batch['img_ids']
+                # feat_list, info_list = feature_extractor.get_detectron_features(batch)
+
+                imgs = batch['imgs']
+
+                try:
+                    images = torch.stack([preprocess(img_path) for img_path in batch["img_path"]]).to("cuda")
+                    features = vis_model(images)
+
+                    features = features.to('cpu')
+                    for feature, img, img_id in zip(features, imgs, img_ids):
+                        feature = torch.flatten(feature, start_dim=1)
+                        feature = torch.permute(feature, [1, 0])
+
+                        grp = f.create_group(img_id)
+                        grp['features'] = feature.numpy()  # [num_features, 2560]
+                        grp['boxes'] = np.array([[0.0, 0.0, 0.0, 0.0] for _ in range(feature.size(0))], dtype="float16")
+                        grp['img_w'] = img.shape[1]
+                        grp['img_h'] = img.shape[0]
+
+                except ValueError as e:
+                    print(batch)
+                    print(e)
+                    continue
+
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--batchsize', default=1, type=int, help='batch_size')
-    parser.add_argument('--cocoroot', type=str, default='/ssd-playpen/home/jmincho/workspace/datasets/COCO/')
-    parser.add_argument('--split', type=str, default='valid', choices=['train', 'valid', 'test'])
-
+    parser.add_argument('--batchsize', default=32, type=int, help='batch_size')
+    parser.add_argument('--cocoroot', type=str, default=r'D:\Research\projects\misrik\VL-T5\datasets\MultiOFF_Dataset')
+    parser.add_argument('--split', type=str, default='all', choices=['train', 'valid', 'test', 'all'])
+    parser.add_argument("--clip", type=str, default="RN50x4")
+    parser.add_argument('--clippool', default=6, type=int)
     args = parser.parse_args()
 
-    SPLIT2DIR = {
-        'train': 'train2014',
-        'valid': 'val2014',
-        'test': 'test2015',
-    }
+    # SPLIT2DIR = {
+    #     'train': 'train2014',
+    #     'valid': 'val2014',
+    #     'test': 'test2015',
+    # }
 
     coco_dir = Path(args.cocoroot).resolve()
-    coco_img_dir = coco_dir.joinpath('images')
-    coco_img_split_dir = coco_img_dir.joinpath(SPLIT2DIR[args.split])
+    coco_img_dir = coco_dir.joinpath("Labelled Images") #('images')
+    coco_img_split_dir = coco_img_dir #coco_img_dir.joinpath(SPLIT2DIR[args.split])
 
     dataset_name = 'COCO'
 
@@ -63,9 +128,15 @@ if __name__ == "__main__":
     dataloader = DataLoader(dataset, batch_size=args.batchsize,
                             shuffle=False, collate_fn=collate_fn, num_workers=4)
 
-    output_fname = out_dir.joinpath(f'{args.split}_boxes{NUM_OBJECTS}.h5')
+    if args.clip:
+        output_fname = out_dir.joinpath(f'{args.split}_clip-{args.clip}-{args.clippool}.h5')
+    else:
+        output_fname = out_dir.joinpath(f'{args.split}_boxes{NUM_OBJECTS}.h5')
     print('features will be saved at', output_fname)
 
     desc = f'{dataset_name}_{args.split}_{(NUM_OBJECTS, DIM)}'
 
-    extract(output_fname, dataloader, desc)
+    if args.clip:
+        extract_clip(output_fname, dataloader, desc, args.clip, args.clippool)
+    else:
+        extract(output_fname, dataloader, desc)

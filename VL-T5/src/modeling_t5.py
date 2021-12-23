@@ -152,6 +152,17 @@ class JointEncoder(T5Stack):
 
         self.visual_embedding = VisualEmbedding(self.config, embed_tokens)
 
+        if config.prompt_k > 0:
+            self.prompt_embedding = nn.Embedding(config.prompt_k, config.d_model)
+            if config.prompt_init:
+                inits = [int(s) for s in config.prompt_init.split(",")]
+                while len(inits) < config.prompt_k:
+                    inits += inits
+                inits = inits[:config.prompt_k]
+                self.prompt_embedding.weight = nn.Parameter(embed_tokens.weight[inits].clone().detach())
+            else:
+                self.prompt_embedding.weight = nn.Parameter(embed_tokens.weight[3:3+config.prompt_k].clone().detach())
+
         self.block = nn.ModuleList(
             [T5Block(config, has_relative_attention_bias=(i == 0))
                 for i in range(config.num_layers)]
@@ -189,6 +200,10 @@ class JointEncoder(T5Stack):
             assert self.embed_tokens is not None, "You have to initialize the model with valid token embeddings"
             inputs_embeds = self.embed_tokens(input_ids)
 
+        if self.config.prompt_k > 0:
+            prompts = self.prompt_embedding(torch.tensor(range(self.config.prompt_k), device=inputs_embeds.device)).repeat(inputs_embeds.size(0), 1, 1)
+            inputs_embeds = torch.cat([prompts, inputs_embeds], dim=1)
+
         B, L = inputs_embeds.size()[:-1]
 
         vis_feats = vis_inputs[0]
@@ -214,6 +229,12 @@ class JointEncoder(T5Stack):
             vis_attention_mask = attention_mask.new_ones(B, V_L)
 
         attention_mask = torch.cat([attention_mask, vis_attention_mask], dim=1)
+        if self.config.prompt_k > 0:
+            n_batches = attention_mask.shape[0]
+            attention_mask = torch.cat(
+                [torch.full((n_batches, self.config.prompt_k), 1).to(inputs_embeds.device), attention_mask],
+                dim=1,
+            )
 
         # ourselves in which case we just need to make it broadcastable to all heads.
         extended_attention_mask = self.get_extended_attention_mask(
@@ -511,7 +532,7 @@ class VLT5(T5ForConditionalGeneration):
 
         sequence_output = decoder_outputs[0]
 
-        assert self.config.tie_word_embeddings is True
+        #assert self.config.tie_word_embeddings is True
 
         if self.config.tie_word_embeddings:
             # Rescale output before projecting on vocab

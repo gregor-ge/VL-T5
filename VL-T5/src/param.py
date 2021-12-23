@@ -67,6 +67,10 @@ def parse_args(parse=True, **optional_kwargs):
     # Quick experiments
     parser.add_argument('--train_topk', type=int, default=-1)
     parser.add_argument('--valid_topk', type=int, default=-1)
+    parser.add_argument('--test_topk', type=int, default=-1)
+
+    parser.add_argument('--eval_epoch', type=int, default=1)
+    parser.add_argument('--data_repeat', type=int, default=1)
 
     parser.add_argument('--preload', action='store_true')
     parser.add_argument('--resume', action='store_true')
@@ -103,11 +107,15 @@ def parse_args(parse=True, **optional_kwargs):
     # Adapter Config
     parser.add_argument('--adapters', action='store_true')
     parser.add_argument('--adapter_architecture', type=str, default='pfeiffer')
-    parser.add_argument('--train_adapter', type=str, default='mm_pretrain')
+    parser.add_argument('--train_adapter', type=str, default='')
     parser.add_argument('--load_adapter', type=str, default=None)
     parser.add_argument('--load_adapter_path', type=str, default=None)
     parser.add_argument('--reduction_factor', type=int, default=16)
     parser.add_argument('--unfreeze_ve', action='store_true')
+
+    parser.add_argument('--prompt_k', type=int, default=0)
+    parser.add_argument('--prompt_init', type=str, default='')
+
     # Training
     parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--valid_batch_size', type=int, default=None)
@@ -144,7 +152,8 @@ def parse_args(parse=True, **optional_kwargs):
     parser.add_argument('--oscar_tags', action='store_true')
 
     parser.add_argument('--prefix', type=str, default=None)
-
+    parser.add_argument('--qprompt', type=str, default='')
+    parser.add_argument('--aprompt', type=str, default='')
     # Pretraining
     parser.add_argument('--ground_upsample', type=int, default=1)
     parser.add_argument('--ground_weight', type=int, default=1)

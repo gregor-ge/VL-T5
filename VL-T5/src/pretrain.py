@@ -134,7 +134,7 @@ class Trainer(TrainerBase):
             src_dir = Path(__file__).resolve().parent
             base_path = str(src_dir.parent)
             src_dir = str(src_dir)
-            #wandb.save(os.path.join(src_dir + "/*.py"), base_path=base_path)
+            ##wandb.save(os.path.join(src_dir + "/*.py"), base_path=base_path)
 
         if self.args.distributed:
             dist.barrier()

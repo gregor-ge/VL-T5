@@ -103,7 +103,15 @@ class VQAFineTuneDataset(Dataset):
             if self.verbose:
                 print(f"Use only {self.topk} data")
 
-        self.data = data
+
+        if mode == "train" and args.data_repeat > 1:
+            self.data = []
+            print(f"Repeating data {args.data_repeat} times")
+            for _ in range(args.data_repeat):
+                self.data.extend(data)
+        else:
+            self.data = data
+
 
         if self.verbose:
             print("# all sentences:", len(self.data))
@@ -179,8 +187,8 @@ class VQAFineTuneDataset(Dataset):
         elif 'question' in datum:
             sent = datum['question']
 
-        #input_ids = self.tokenizer.encode(f'vqa: {sent}', max_length=20, truncation=True)
-        input_ids = self.tokenizer.encode(f"question: {sent}. answer: ", max_length=30, truncation=True)
+        prompt = self.args.qprompt if self.args.qprompt else "okvqa: {}"
+        input_ids = self.tokenizer.encode(prompt.format(sent), max_length=30, truncation=True)
 
         question_id = datum['question_id']
         out_dict['question_id'] = question_id
@@ -232,7 +240,8 @@ class VQAFineTuneDataset(Dataset):
                 out_dict['score'] = score
                 out_dict['all_answers'] = [a['answer'] for a in answers]
 
-                target_ids = self.tokenizer.encode(answer, max_length=10, truncation=True)
+                prompt = self.args.aprompt if self.args.aprompt else "{}"
+                target_ids = self.tokenizer.encode(prompt.format(answer), max_length=10, truncation=True)
 
                 out_dict['target_ids'] = torch.LongTensor(target_ids)
                 out_dict['target_length'] = len(target_ids)
@@ -262,8 +271,8 @@ class VQAFineTuneDataset(Dataset):
                 out_dict['score'] = score
                 out_dict['all_answers'] = answers
 
-
-                target_ids = self.tokenizer.encode(answer, max_length=10, truncation=True)
+                prompt = self.args.aprompt if self.args.aprompt else "{}"
+                target_ids = self.tokenizer.encode(prompt.format(answer), max_length=10, truncation=True)
 
                 out_dict['target_ids'] = torch.LongTensor(target_ids)
                 out_dict['target_length'] = len(target_ids)
@@ -387,7 +396,7 @@ def get_loader(args, split='karpathy_train', mode='train',
 
     if mode == 'train':
         loader = DataLoader(
-            dataset, batch_size=batch_size, shuffle=(sampler is None),
+            dataset, batch_size=batch_size, shuffle=(sampler is None and (args.train_topk == -1 or args.train_topk > batch_size)),
             num_workers=workers, pin_memory=True, sampler=sampler,
             collate_fn=dataset.collate_fn)
     else:

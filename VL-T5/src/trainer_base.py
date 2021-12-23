@@ -1,6 +1,7 @@
 import torch.backends.cudnn as cudnn
 import torch.multiprocessing as mp
 import torch.distributed as dist
+from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
 from torch.nn.parallel import DistributedDataParallel as DDP
 import os
 import collections
@@ -88,6 +89,9 @@ class TrainerBase(object):
         config.share_vis_lang_layer_norm = args.share_vis_lang_layer_norm
         config.classifier = args.classifier
 
+        config.prompt_k = args.prompt_k
+        config.prompt_init = args.prompt_init
+
         return config
 
 
@@ -103,22 +107,30 @@ class TrainerBase(object):
         )
 
         if self.args.adapters:
-            print("Adding adapter ", self.args.train_adapter)
-            model.add_adapter(self.args.train_adapter,
-                              config=AdapterConfig.load(self.args.adapter_architecture, reduction_factor=self.args.reduction_factor))
+            if self.args.train_adapter:
+                print("Adding adapter ", self.args.train_adapter)
+                model.add_adapter(self.args.train_adapter,
+                                  config=AdapterConfig.load(self.args.adapter_architecture, reduction_factor=self.args.reduction_factor))
 
             if self.args.load_adapter:
-                print("Loading adapter from ", self.args.load_adapter_path, " as ", self.args.load_adapter)
+                print("Loading adapter and VisionEmbedding from ", self.args.load_adapter_path, " as ", self.args.load_adapter)
+                state_dict = torch.load("%s.pth" % self.args.load_adapter_path)
+                if "module.encoder.visual_embedding.obj_order_embedding.weight" in state_dict:
+                    state_dict.pop("module.encoder.visual_embedding.obj_order_embedding.weight")
+                consume_prefix_in_state_dict_if_present(state_dict, "module.")
+                load_res = model.load_state_dict(state_dict, strict=False)
+                print(load_res.unexpected_keys)
                 model.load_adapter(self.args.load_adapter_path, load_as=self.args.load_adapter, with_head=False)
         return model
 
     def set_active_adapters(self):
         if not self.args.adapters:
             return
+        adapters = []
         if self.args.load_adapter:
-            adapters = [self.args.load_adapter, self.args.train_adapter]
-        else:
-            adapters = self.args.train_adapter
+            adapters.append(self.args.load_adapter)
+        if self.args.train_adapter:
+            adapters.append(self.args.train_adapter)
         print("Active adapters: ", adapters)
         try:
             self.model.set_active_adapters(adapters)
@@ -128,14 +140,19 @@ class TrainerBase(object):
     def train_adapters(self):
         if not self.args.adapters:
             return
-        print("Training adapter ", self.args.train_adapter)
 
         if self.args.distributed:
             model = self.model.module
         else:
             model = self.model
 
-        model.train_adapter(self.args.train_adapter)
+        if self.args.train_adapter:
+            print("Training adapter ", self.args.train_adapter)
+            model.train_adapter(self.args.train_adapter)
+        elif self.args.prompt_k > 0:
+            print("Freezing model")
+            for param in model.parameters():
+                param.requires_grad = False
 
         if self.args.unfreeze_ve:
             print("Unfreezing VisionEmbedding")
@@ -144,7 +161,10 @@ class TrainerBase(object):
                     print("Not unfreezing obj_order_embedding (it is tied with lm_head and embedding)")
                     continue
                 param.requires_grad = True
-        print("lm_head requires grad: ", *(p.requires_grad for p in model.lm_head.parameters()), *(p.requires_grad for p in model.shared.parameters()))
+        if self.args.prompt_k > 0:
+            print("Unfreezing prompt embedding")
+            for name, param in model.encoder.prompt_embedding.named_parameters():
+                param.requires_grad = True
         self.set_active_adapters()
 
     def create_tokenizer(self, **kwargs):
@@ -232,10 +252,12 @@ class TrainerBase(object):
                 new_key = 'model.encoder.' + key[len("model.vis_encoder."):]
                 state_dict[new_key] = state_dict.pop(key)
 
+        if "encoder.visual_embedding.obj_order_embedding.weight" in state_dict:
+            state_dict.pop("encoder.visual_embedding.obj_order_embedding.weight")
         results = self.model.load_state_dict(state_dict, strict=False)
         if self.verbose:
             print('Model loaded from ', ckpt_path)
-            pprint(results)
+            pprint(results.unexpected_keys)
         if self.args.adapters:
             if ckpt_path.endswith(".pth"):
                 ckpt_path = ckpt_path[:-4]
@@ -272,13 +294,20 @@ class TrainerBase(object):
             if self.args.distributed:
                 state_dict = self.model.module.encoder.visual_embedding.state_dict()
                 state_dict = {"module.encoder.visual_embedding." + k: v for k, v in state_dict.items()}
-                torch.save(state_dict, os.path.join(self.args.output, "%s.pth" % name))
-                self.model.module.save_adapter(os.path.join(self.args.output, name), self.args.train_adapter, with_head=False)
             else:
                 state_dict = self.model.encoder.visual_embedding.state_dict()
                 state_dict = {"module.encoder.visual_embedding."+k: v for k,v in state_dict.items()}
-                torch.save(state_dict, os.path.join(self.args.output, "%s.pth" % name))
-                self.model.save_adapter(os.path.join(self.args.output, name), self.args.train_adapter, with_head=False)
+            if self.args.prompt_k > 0:
+                if self.args.distributed:
+                    sd = self.model.module.encoder.prompt_embedding.state_dict()
+                    state_dict.update({"module.encoder.prompt_embedding." + k: v for k, v in sd.items()})
+                else:
+                    sd = self.model.encoder.prompt_embedding.state_dict()
+                    state_dict.update({"module.encoder.prompt_embedding." + k: v for k, v in sd.items()})
+            torch.save(state_dict, os.path.join(self.args.output, "%s.pth" % name))
+            if self.args.train_adapter:
+                model = self.model if not self.args.distributed else self.model.module
+                model.save_adapter(os.path.join(self.args.output, name), self.args.train_adapter, with_head=False)
         else:
             torch.save(self.model.state_dict(), os.path.join(self.args.output, "%s.pth" % name))
         if self.args.save_optim:
@@ -300,11 +329,18 @@ class TrainerBase(object):
                 new_key = 'module.model.encoder.' + key[len("module.model.vis_encoder."):]
                 state_dict[new_key] = state_dict.pop(key)
 
+            if self.args.distributed and not key.startswith("module."):
+                new_key = 'module.' + key
+                state_dict[new_key] = state_dict.pop(key)
+
+        if not self.args.distributed:
+            consume_prefix_in_state_dict_if_present(state_dict, "module.")
         results = self.model.load_state_dict(state_dict, strict=False)
         if self.verbose:
             print('Model loaded from ', path)
-            pprint(results)
+            pprint(results.unexpected_keys)
         if self.args.adapters:
             print('Adapter loaded from ', path)
-            self.model.load_adapter(path, load_as=self.args.train_adapter, with_head=False)
+            model = self.model if not self.args.distributed else self.model.module
+            model.load_adapter(path, load_as=self.args.train_adapter, with_head=False)
             self.set_active_adapters()

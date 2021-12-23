@@ -145,7 +145,7 @@ class Trainer(TrainerBase):
             src_dir = Path(__file__).resolve().parent
             base_path = str(src_dir.parent)
             src_dir = str(src_dir)
-            wandb.save(os.path.join(src_dir + "/*.py"), base_path=base_path)
+            #wandb.save(os.path.join(src_dir + "/*.py"), base_path=base_path)
 
         if self.args.distributed:
             dist.barrier()
@@ -155,11 +155,12 @@ class Trainer(TrainerBase):
         for epoch in range(self.args.epochs):
             if self.start_epoch is not None:
                 epoch += self.start_epoch
-            if self.args.distributed:
+            if self.args.distributed and not self.args.preload:
                 self.train_loader.sampler.set_epoch(epoch)
 
             # Train
             self.model.train()
+            self.train_adapters()
 
             if self.verbose:
                 pbar = tqdm(total=len(self.train_loader), ncols=240)
@@ -435,5 +436,4 @@ if __name__ == "__main__":
             run_name += f'_{comment}'
         args.run_name = run_name
 
-    if args.distributed:
-        main_worker(args.local_rank, args)
+    main_worker(args.local_rank, args)

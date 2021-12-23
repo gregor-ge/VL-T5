@@ -18,7 +18,6 @@ from torch.utils.data.distributed import DistributedSampler
 from transformers import T5TokenizerFast, BartTokenizer
 from tokenization import VLT5TokenizerFast
 
-
 project_dir = Path(__file__).resolve().parent.parent  # VLT5
 workspace_dir = project_dir.parent
 dataset_dir = workspace_dir.joinpath('datasets/').resolve()
@@ -64,8 +63,8 @@ class VQAFineTuneDataset(Dataset):
                 do_lower_case=self.args.do_lower_case)
 
             if args.use_vis_order_embedding:
-                additional_special_tokens = [f'<extra_id_{i}>' for i in range(100-1, -1, -1)] + \
-                        [f'<vis_extra_id_{i}>' for i in range(100-1, -1, -1)]
+                additional_special_tokens = [f'<extra_id_{i}>' for i in range(100 - 1, -1, -1)] + \
+                                            [f'<vis_extra_id_{i}>' for i in range(100 - 1, -1, -1)]
                 special_tokens_dict = {'additional_special_tokens': additional_special_tokens}
                 num_added_toks = self.tokenizer.add_special_tokens(special_tokens_dict)
 
@@ -88,6 +87,12 @@ class VQAFineTuneDataset(Dataset):
                         self.img_ids_to_source[_d['img_id']] = source
                         _d['source'] = source
 
+                if args.distributed and args.preload:
+                    gpu, world_size = rank
+                    original_len = len(_data_info_dicts)
+                    _data_info_dicts = _data_info_dicts[gpu * (len(_data_info_dicts) // world_size):(gpu + 1) * (
+                                len(_data_info_dicts) // world_size)]
+                    print(f"Distributed training, processing {len(_data_info_dicts)}/{original_len} images")
                 data_info_dicts.extend(_data_info_dicts)
             if self.verbose:
                 print(f"Loaded {len(_data_info_dicts)} data from", source)
@@ -103,7 +108,15 @@ class VQAFineTuneDataset(Dataset):
             if self.verbose:
                 print(f"Use only {self.topk} data")
 
-        self.data = data
+        if mode == "train" and args.data_repeat > 1:
+            self.data = []
+            print(f"Repeating data {args.data_repeat} times")
+            for _ in range(args.data_repeat):
+                self.data.extend(data)
+        else:
+            self.data = data
+
+        print("# examples:", len(data), " rank ", rank)
 
         if self.verbose:
             print("# all sentences:", len(self.data))
@@ -120,6 +133,67 @@ class VQAFineTuneDataset(Dataset):
             'train2014': coco_feature_dir.joinpath(f'train2014_obj36.h5'),
             'val2014': coco_feature_dir.joinpath(f'val2014_obj36.h5'),
         }
+
+        if args.preload:
+            self.source_to_h5 = {
+                'train2014': coco_dir.joinpath('features').joinpath(
+                    'converted_train2014_obj36.h5'),
+                'val2014': coco_dir.joinpath('features').joinpath('converted_val2014_obj36.h5')
+
+            }
+            unique_ids = {k: set() for k in self.source_to_h5.keys()}
+            for datum in data:
+                img_id = datum['img_id']
+                ids = unique_ids[self.img_ids_to_source[datum['img_id']]]
+                if img_id not in ids:
+                    ids.add(img_id)
+
+            source_to_h5 = {
+                'train2014': dict(),
+                'val2014': dict()
+            }
+            for source in unique_ids.keys():
+                if len(unique_ids[source]) == 0:
+                    continue
+                ids = unique_ids[source]
+                d = source_to_h5[source]
+                f = self.source_to_h5[source]
+                if isinstance(f, Path):
+                    path = self.source_to_h5[source]
+                    f = h5py.File(path, 'r', )
+                    self.source_to_h5[source] = f
+
+                for i in tqdm(range(0, len(f["img_id"]), 100), desc="Preloading " + source):
+                    max_j = 0
+                    idx_and_ids = []
+                    for j, img_id in enumerate(f["img_id"][i:i + 100]):
+                        img_id = img_id.decode()
+                        if img_id not in ids:
+                            continue
+                        max_j = j + 1
+                        idx_and_ids.append((j, img_id))
+                    if max_j == 0:
+                        continue
+                    # obj_id = f["obj_id"][i:i+max_j]
+                    # attr_id = f["attr_id"][i:i+max_j]
+                    features = f["features"][i:i + max_j]
+                    img_h = f["img_h"][i:i + max_j]
+                    img_w = f["img_w"][i:i + max_j]
+                    boxes = f["boxes"][i:i + max_j]
+                    for j, img_id in idx_and_ids:
+                        # d[f'{img_id}/obj_id'] = obj_id[j]
+                        # d[f'{img_id}/attr_id'] = attr_id[j]
+                        d[f'{img_id}/features'] = features[j]
+                        d[f'{img_id}/img_h'] = img_h[j]
+                        d[f'{img_id}/img_w'] = img_w[j]
+                        d[f'{img_id}/boxes'] = boxes[j]
+                    # d[f'{img_id}/obj_id'] = f[f'{img_id}/obj_id'][()]
+                    # d[f'{img_id}/attr_id'] = f[f'{img_id}/attr_id'][()]
+                    # d[f'{img_id}/features'] = f[f'{img_id}/features'][()]
+                    # d[f'{img_id}/img_h'] = f[f'{img_id}/img_h'][()]
+                    # d[f'{img_id}/img_w'] = f[f'{img_id}/img_w'][()]
+                    # d[f'{img_id}/boxes'] = f[f'{img_id}/boxes'][()]
+            self.source_to_h5 = source_to_h5
 
     def __len__(self):
         return len(self.data)
@@ -146,9 +220,10 @@ class VQAFineTuneDataset(Dataset):
                 # self.split_to_h5_features[split_i] = f
                 self.source_to_h5[source] = f
 
-            feats = np.zeros(shape=(self.n_boxes, 2048), dtype=np.float32)
+            # feats = np.zeros(shape=(self.n_boxes, 2048), dtype=np.float32)
             try:
-                f[f'{img_id}/features'].read_direct(feats)
+                # f[f'{img_id}/features'].read_direct(feats)
+                feats = f[f'{img_id}/features'][()]
             except KeyError:
                 print('img_id', img_id)
                 print(datum)
@@ -163,9 +238,9 @@ class VQAFineTuneDataset(Dataset):
             boxes = f[f'{img_id}/boxes'][()]  # (x1, y1, x2, y2)
             boxes[:, (0, 2)] /= img_w
             boxes[:, (1, 3)] /= img_h
-            np.testing.assert_array_less(boxes, 1+1e-5)
+            # np.testing.assert_array_less(boxes, 1+1e-5)
             # np.testing.assert_array_less(boxes, 1+5e-2)
-            np.testing.assert_array_less(-boxes, 0+1e-5)
+            # np.testing.assert_array_less(-boxes, 0+1e-5)
             boxes = torch.from_numpy(boxes)
 
             boxes.clamp_(min=0.0, max=1.0)
@@ -179,11 +254,11 @@ class VQAFineTuneDataset(Dataset):
         elif 'question' in datum:
             sent = datum['question']
 
-        input_ids = self.tokenizer.encode(f'vqa: {sent}', max_length=20, truncation=True)
+        prompt = self.args.qprompt if self.args.qprompt else "okvqa: {}"
+        input_ids = self.tokenizer.encode(prompt.format(sent), max_length=30, truncation=True)
 
         question_id = datum['question_id']
         out_dict['question_id'] = question_id
-
 
         out_dict['sent'] = sent
         out_dict['input_ids'] = torch.LongTensor(input_ids)
@@ -231,7 +306,8 @@ class VQAFineTuneDataset(Dataset):
                 out_dict['score'] = score
                 out_dict['all_answers'] = [a['answer'] for a in answers]
 
-                target_ids = self.tokenizer.encode(answer, max_length=10, truncation=True)
+                prompt = self.args.aprompt if self.args.aprompt else "{}"
+                target_ids = self.tokenizer.encode(prompt.format(answer), max_length=10, truncation=True)
 
                 out_dict['target_ids'] = torch.LongTensor(target_ids)
                 out_dict['target_length'] = len(target_ids)
@@ -261,14 +337,13 @@ class VQAFineTuneDataset(Dataset):
                 out_dict['score'] = score
                 out_dict['all_answers'] = answers
 
-
-                target_ids = self.tokenizer.encode(answer, max_length=10, truncation=True)
+                prompt = self.args.aprompt if self.args.aprompt else "{}"
+                target_ids = self.tokenizer.encode(prompt.format(answer), max_length=10, truncation=True)
 
                 out_dict['target_ids'] = torch.LongTensor(target_ids)
                 out_dict['target_length'] = len(target_ids)
 
         return out_dict
-
 
     def collate_fn(self, batch):
         batch_entry = {}
@@ -365,7 +440,6 @@ class VQAFineTuneDataset(Dataset):
 
 def get_loader(args, split='karpathy_train', mode='train',
                batch_size=32, workers=4, distributed=False, gpu=0, topk=-1):
-
     verbose = (gpu == 0)
 
     _dset = VQADataset(split, verbose)
@@ -373,20 +447,21 @@ def get_loader(args, split='karpathy_train', mode='train',
     dataset = VQAFineTuneDataset(
         split,
         raw_dataset=_dset,
-        rank=gpu,
+        rank=(gpu, args.world_size),
         topk=topk,
         verbose=verbose,
         args=args,
         mode=mode)
 
-    if distributed:
+    if distributed and not args.preload:
         sampler = DistributedSampler(dataset)
     else:
         sampler = None
 
     if mode == 'train':
         loader = DataLoader(
-            dataset, batch_size=batch_size, shuffle=(sampler is None),
+            dataset, batch_size=batch_size,
+            shuffle=(sampler is None and (args.train_topk == -1 or args.train_topk > batch_size)),
             num_workers=workers, pin_memory=True, sampler=sampler,
             collate_fn=dataset.collate_fn)
     else:
@@ -480,53 +555,74 @@ class VQAEvaluator:
 
         """https://github.com/GT-Vision-Lab/VQA/blob/master/PythonEvaluationTools/vqaEvaluation/vqaEval.py"""
 
-        self.contractions = {"aint": "ain't", "arent": "aren't", "cant": "can't", "couldve": "could've", "couldnt": "couldn't", \
-							 "couldn'tve": "couldn't've", "couldnt've": "couldn't've", "didnt": "didn't", "doesnt": "doesn't", "dont": "don't", "hadnt": "hadn't", \
-							 "hadnt've": "hadn't've", "hadn'tve": "hadn't've", "hasnt": "hasn't", "havent": "haven't", "hed": "he'd", "hed've": "he'd've", \
-							 "he'dve": "he'd've", "hes": "he's", "howd": "how'd", "howll": "how'll", "hows": "how's", "Id've": "I'd've", "I'dve": "I'd've", \
-							 "Im": "I'm", "Ive": "I've", "isnt": "isn't", "itd": "it'd", "itd've": "it'd've", "it'dve": "it'd've", "itll": "it'll", "let's": "let's", \
-							 "maam": "ma'am", "mightnt": "mightn't", "mightnt've": "mightn't've", "mightn'tve": "mightn't've", "mightve": "might've", \
-							 "mustnt": "mustn't", "mustve": "must've", "neednt": "needn't", "notve": "not've", "oclock": "o'clock", "oughtnt": "oughtn't", \
-							 "ow's'at": "'ow's'at", "'ows'at": "'ow's'at", "'ow'sat": "'ow's'at", "shant": "shan't", "shed've": "she'd've", "she'dve": "she'd've", \
-							 "she's": "she's", "shouldve": "should've", "shouldnt": "shouldn't", "shouldnt've": "shouldn't've", "shouldn'tve": "shouldn't've", \
-							 "somebody'd": "somebodyd", "somebodyd've": "somebody'd've", "somebody'dve": "somebody'd've", "somebodyll": "somebody'll", \
-							 "somebodys": "somebody's", "someoned": "someone'd", "someoned've": "someone'd've", "someone'dve": "someone'd've", \
-							 "someonell": "someone'll", "someones": "someone's", "somethingd": "something'd", "somethingd've": "something'd've", \
-							 "something'dve": "something'd've", "somethingll": "something'll", "thats": "that's", "thered": "there'd", "thered've": "there'd've", \
-							 "there'dve": "there'd've", "therere": "there're", "theres": "there's", "theyd": "they'd", "theyd've": "they'd've", \
-							 "they'dve": "they'd've", "theyll": "they'll", "theyre": "they're", "theyve": "they've", "twas": "'twas", "wasnt": "wasn't", \
-							 "wed've": "we'd've", "we'dve": "we'd've", "weve": "we've", "werent": "weren't", "whatll": "what'll", "whatre": "what're", \
-							 "whats": "what's", "whatve": "what've", "whens": "when's", "whered": "where'd", "wheres": "where's", "whereve": "where've", \
-							 "whod": "who'd", "whod've": "who'd've", "who'dve": "who'd've", "wholl": "who'll", "whos": "who's", "whove": "who've", "whyll": "why'll", \
-							 "whyre": "why're", "whys": "why's", "wont": "won't", "wouldve": "would've", "wouldnt": "wouldn't", "wouldnt've": "wouldn't've", \
-							 "wouldn'tve": "wouldn't've", "yall": "y'all", "yall'll": "y'all'll", "y'allll": "y'all'll", "yall'd've": "y'all'd've", \
-							 "y'alld've": "y'all'd've", "y'all'dve": "y'all'd've", "youd": "you'd", "youd've": "you'd've", "you'dve": "you'd've", \
-							 "youll": "you'll", "youre": "you're", "youve": "you've"}
+        self.contractions = {"aint": "ain't", "arent": "aren't", "cant": "can't", "couldve": "could've",
+                             "couldnt": "couldn't", \
+                             "couldn'tve": "couldn't've", "couldnt've": "couldn't've", "didnt": "didn't",
+                             "doesnt": "doesn't", "dont": "don't", "hadnt": "hadn't", \
+                             "hadnt've": "hadn't've", "hadn'tve": "hadn't've", "hasnt": "hasn't", "havent": "haven't",
+                             "hed": "he'd", "hed've": "he'd've", \
+                             "he'dve": "he'd've", "hes": "he's", "howd": "how'd", "howll": "how'll", "hows": "how's",
+                             "Id've": "I'd've", "I'dve": "I'd've", \
+                             "Im": "I'm", "Ive": "I've", "isnt": "isn't", "itd": "it'd", "itd've": "it'd've",
+                             "it'dve": "it'd've", "itll": "it'll", "let's": "let's", \
+                             "maam": "ma'am", "mightnt": "mightn't", "mightnt've": "mightn't've",
+                             "mightn'tve": "mightn't've", "mightve": "might've", \
+                             "mustnt": "mustn't", "mustve": "must've", "neednt": "needn't", "notve": "not've",
+                             "oclock": "o'clock", "oughtnt": "oughtn't", \
+                             "ow's'at": "'ow's'at", "'ows'at": "'ow's'at", "'ow'sat": "'ow's'at", "shant": "shan't",
+                             "shed've": "she'd've", "she'dve": "she'd've", \
+                             "she's": "she's", "shouldve": "should've", "shouldnt": "shouldn't",
+                             "shouldnt've": "shouldn't've", "shouldn'tve": "shouldn't've", \
+                             "somebody'd": "somebodyd", "somebodyd've": "somebody'd've",
+                             "somebody'dve": "somebody'd've", "somebodyll": "somebody'll", \
+                             "somebodys": "somebody's", "someoned": "someone'd", "someoned've": "someone'd've",
+                             "someone'dve": "someone'd've", \
+                             "someonell": "someone'll", "someones": "someone's", "somethingd": "something'd",
+                             "somethingd've": "something'd've", \
+                             "something'dve": "something'd've", "somethingll": "something'll", "thats": "that's",
+                             "thered": "there'd", "thered've": "there'd've", \
+                             "there'dve": "there'd've", "therere": "there're", "theres": "there's", "theyd": "they'd",
+                             "theyd've": "they'd've", \
+                             "they'dve": "they'd've", "theyll": "they'll", "theyre": "they're", "theyve": "they've",
+                             "twas": "'twas", "wasnt": "wasn't", \
+                             "wed've": "we'd've", "we'dve": "we'd've", "weve": "we've", "werent": "weren't",
+                             "whatll": "what'll", "whatre": "what're", \
+                             "whats": "what's", "whatve": "what've", "whens": "when's", "whered": "where'd",
+                             "wheres": "where's", "whereve": "where've", \
+                             "whod": "who'd", "whod've": "who'd've", "who'dve": "who'd've", "wholl": "who'll",
+                             "whos": "who's", "whove": "who've", "whyll": "why'll", \
+                             "whyre": "why're", "whys": "why's", "wont": "won't", "wouldve": "would've",
+                             "wouldnt": "wouldn't", "wouldnt've": "wouldn't've", \
+                             "wouldn'tve": "wouldn't've", "yall": "y'all", "yall'll": "y'all'll", "y'allll": "y'all'll",
+                             "yall'd've": "y'all'd've", \
+                             "y'alld've": "y'all'd've", "y'all'dve": "y'all'd've", "youd": "you'd",
+                             "youd've": "you'd've", "you'dve": "you'd've", \
+                             "youll": "you'll", "youre": "you're", "youve": "you've"}
 
-        self.manualMap    = { 'none': '0',
-							  'zero': '0',
-							  'one': '1',
-							  'two': '2',
-							  'three': '3',
-							  'four': '4',
-							  'five': '5',
-							  'six': '6',
-							  'seven': '7',
-							  'eight': '8',
-							  'nine': '9',
-							  'ten': '10'
-							}
+        self.manualMap = {'none': '0',
+                          'zero': '0',
+                          'one': '1',
+                          'two': '2',
+                          'three': '3',
+                          'four': '4',
+                          'five': '5',
+                          'six': '6',
+                          'seven': '7',
+                          'eight': '8',
+                          'nine': '9',
+                          'ten': '10'
+                          }
 
-        self.articles     = ['a',
-							 'an',
-							 'the'
-							]
+        self.articles = ['a',
+                         'an',
+                         'the'
+                         ]
 
-        self.periodStrip  = re.compile("(?!<=\d)(\.)(?!\d)")
-        self.commaStrip   = re.compile("(\d)(\,)(\d)")
-        self.punct        = [';', r"/", '[', ']', '"', '{', '}',
-							 '(', ')', '=', '+', '\\', '_', '-',
-							 '>', '<', '@', '`', ',', '?', '!']
+        self.periodStrip = re.compile("(?!<=\d)(\.)(?!\d)")
+        self.commaStrip = re.compile("(\d)(\,)(\d)")
+        self.punct = [';', r"/", '[', ']', '"', '{', '}',
+                      '(', ')', '=', '+', '\\', '_', '-',
+                      '>', '<', '@', '`', ',', '?', '!']
 
         self.n = 2
 
@@ -565,10 +661,10 @@ class VQAEvaluator:
 
         gts = self.dataset.id2datum_gt
 
-        self.accuracy     = {}
-        self.evalQA       = {}
+        self.accuracy = {}
+        self.evalQA = {}
         self.evalQuesType = {}
-        self.evalAnsType  = {}
+        self.evalAnsType = {}
 
         accQA = []
         accQuesType = {}
@@ -588,25 +684,25 @@ class VQAEvaluator:
                 if datum['is_topk_optimal'] != is_topk_optimal:
                     continue
 
-            resAns      = resAns.replace('\n', ' ')
-            resAns      = resAns.replace('\t', ' ')
-            resAns      = resAns.strip()
-            resAns      = self.processPunctuation(resAns)
-            resAns      = self.processDigitArticle(resAns)
+            resAns = resAns.replace('\n', ' ')
+            resAns = resAns.replace('\t', ' ')
+            resAns = resAns.strip()
+            resAns = self.processPunctuation(resAns)
+            resAns = self.processDigitArticle(resAns)
 
-            gtAcc  = []
+            gtAcc = []
             gtAnswers = [ans['answer'] for ans in gts[quesId]['answers']]
             if len(set(gtAnswers)) > 1:
                 for ansDic in gts[quesId]['answers']:
                     ansDic['answer'] = self.processPunctuation(ansDic['answer'])
             for gtAnsDatum in gts[quesId]['answers']:
-                otherGTAns = [item for item in gts[quesId]['answers'] if item!=gtAnsDatum]
-                matchingAns = [item for item in otherGTAns if item['answer']==resAns]
-                acc = min(1, float(len(matchingAns))/3)
+                otherGTAns = [item for item in gts[quesId]['answers'] if item != gtAnsDatum]
+                matchingAns = [item for item in otherGTAns if item['answer'] == resAns]
+                acc = min(1, float(len(matchingAns)) / 3)
                 gtAcc.append(acc)
-            quesType    = gts[quesId]['question_type']
-            ansType     = gts[quesId]['answer_type']
-            avgGTAcc = float(sum(gtAcc))/len(gtAcc)
+            quesType = gts[quesId]['question_type']
+            ansType = gts[quesId]['answer_type']
+            avgGTAcc = float(sum(gtAcc)) / len(gtAcc)
             accQA.append(avgGTAcc)
             if quesType not in accQuesType:
                 accQuesType[quesType] = []
@@ -618,7 +714,6 @@ class VQAEvaluator:
             self.setEvalQA(quesId, avgGTAcc)
             self.setEvalQuesType(quesId, quesType, avgGTAcc)
             self.setEvalAnsType(quesId, ansType, avgGTAcc)
-
 
         if len(accQA) == 0:
             return {
@@ -632,11 +727,11 @@ class VQAEvaluator:
         return self.accuracy
 
     def normalize_answer(self, resAns):
-        resAns      = resAns.replace('\n', ' ')
-        resAns      = resAns.replace('\t', ' ')
-        resAns      = resAns.strip()
-        resAns      = self.processPunctuation(resAns)
-        resAns      = self.processDigitArticle(resAns)
+        resAns = resAns.replace('\n', ' ')
+        resAns = resAns.replace('\t', ' ')
+        resAns = resAns.strip()
+        resAns = self.processPunctuation(resAns)
+        resAns = self.processDigitArticle(resAns)
         resAns = resAns.replace(',', '')
         return resAns
 
@@ -648,8 +743,8 @@ class VQAEvaluator:
             else:
                 outText = outText.replace(p, ' ')
         outText = self.periodStrip.sub("",
-                                        outText,
-                                        re.UNICODE)
+                                       outText,
+                                       re.UNICODE)
         return outText
 
     def processDigitArticle(self, inText):
@@ -668,20 +763,24 @@ class VQAEvaluator:
         return outText
 
     def setEvalQA(self, quesId, acc):
-        self.evalQA[quesId] = round(100*acc, self.n)
+        self.evalQA[quesId] = round(100 * acc, self.n)
 
     def setEvalQuesType(self, quesId, quesType, acc):
         if quesType not in self.evalQuesType:
             self.evalQuesType[quesType] = {}
-        self.evalQuesType[quesType][quesId] = round(100*acc, self.n)
+        self.evalQuesType[quesType][quesId] = round(100 * acc, self.n)
 
     def setEvalAnsType(self, quesId, ansType, acc):
         if ansType not in self.evalAnsType:
             self.evalAnsType[ansType] = {}
-        self.evalAnsType[ansType][quesId] = round(100*acc, self.n)
+        self.evalAnsType[ansType][quesId] = round(100 * acc, self.n)
 
     def setAccuracy(self, accQA, accQuesType, accAnsType):
-        self.accuracy['overall']         = round(100*float(sum(accQA))/len(accQA), self.n)
-        self.accuracy['perQuestionType'] = {quesType: round(100*float(sum(accQuesType[quesType]))/len(accQuesType[quesType]), self.n) for quesType in accQuesType}
-        self.accuracy['perAnswerType']   = {ansType:  round(100*float(sum(accAnsType[ansType]))/len(accAnsType[ansType]), self.n) for ansType in accAnsType}
+        self.accuracy['overall'] = round(100 * float(sum(accQA)) / len(accQA), self.n)
+        self.accuracy['perQuestionType'] = {
+            quesType: round(100 * float(sum(accQuesType[quesType])) / len(accQuesType[quesType]), self.n) for quesType
+            in accQuesType}
+        self.accuracy['perAnswerType'] = {
+            ansType: round(100 * float(sum(accAnsType[ansType])) / len(accAnsType[ansType]), self.n) for ansType in
+            accAnsType}
 
