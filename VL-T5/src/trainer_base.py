@@ -76,6 +76,7 @@ class TrainerBase(object):
         config.n_images = 2
 
         config.use_vis_order_embedding = args.use_vis_order_embedding
+        config.use_vis_pos = args.use_vis_pos
 
         config.dropout_rate = args.dropout
         config.dropout = args.dropout

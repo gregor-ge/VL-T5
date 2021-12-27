@@ -64,6 +64,8 @@ def parse_args(parse=True, **optional_kwargs):
 
     parser.add_argument('--submit', action='store_true')
 
+    parser.add_argument("--feature_type", default='obj36')
+
     # Quick experiments
     parser.add_argument('--train_topk', type=int, default=-1)
     parser.add_argument('--valid_topk', type=int, default=-1)
@@ -91,11 +93,13 @@ def parse_args(parse=True, **optional_kwargs):
     parser.add_argument('--backbone', type=str, default='t5-base')
     parser.add_argument('--tokenizer', type=str, default=None)
 
-    parser.add_argument('--feat_dim', type=float, default=2048)
-    parser.add_argument('--pos_dim', type=float, default=4)
+    parser.add_argument('--feat_dim', type=int, default=2048)
+    parser.add_argument('--pos_dim', type=int, default=4)
+
+    parser.add_argument('--use_vis_pos', default=True, type=str2bool)
 
     parser.add_argument('--use_vision', default=True, type=str2bool)
-    parser.add_argument('--use_vis_order_embedding', default=True, type=str2bool)
+    parser.add_argument('--use_vis_order_embedding', default=False, type=str2bool)
     parser.add_argument('--use_vis_layer_norm', default=True, type=str2bool)
     parser.add_argument('--individual_vis_layer_norm', default=True, type=str2bool)
     parser.add_argument('--share_vis_lang_layer_norm', action='store_true')

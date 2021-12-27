@@ -111,7 +111,10 @@ class VisualEmbedding(nn.Module):
         pos = torch.cat([pos, area], dim=2) # [B, N, 5]
 
         # [B, N, d_model]
-        absolute_vis_pos_embedding = self.absolute_vis_pos_embedding(pos)
+        if self.config.use_vis_pos:
+            absolute_vis_pos_embedding = self.absolute_vis_pos_embedding(pos)
+        else:
+            absolute_vis_pos_embedding = torch.zeros_like(feat_embedding, device=feat_embedding.device)
         # absolute_vis_pos_embedding = self.absolute_vis_pos_layer_norm(absolute_vis_pos_embedding)
 
 

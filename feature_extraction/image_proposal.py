@@ -28,7 +28,7 @@ class COCODataset(Dataset):
 
     def __getitem__(self, idx):
         image_path = self.image_path_list[idx]
-        image_id = image_path.stem
+        image_id = image_path.name  #stem
 
         img = cv2.imread(str(image_path))
 
@@ -99,9 +99,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--batchsize', default=32, type=int, help='batch_size')
     parser.add_argument('--cocoroot', type=str, default=r'D:\Research\projects\misrik\VL-T5\datasets\MultiOFF_Dataset')
-    parser.add_argument('--imgroot', type=str, default=r'D:\Research\projects\misrik\VL-T5\datasets\MultiOFF_Dataset')
     parser.add_argument('--split', type=str, default='all', choices=['train', 'valid', 'test', 'all'])
-    parser.add_argument("--clip", type=str, default="RN50x4")
+    parser.add_argument("--clip", type=str, default="RN50x16")
     parser.add_argument('--clippool', default=6, type=int)
     parser.add_argument('--download_root', type=str, default=r'D:\Research\projects\misrik\VL-T5\datasets\MultiOFF_Dataset')
     args = parser.parse_args()
@@ -113,7 +112,7 @@ if __name__ == "__main__":
     # }
 
     coco_dir = Path(args.cocoroot).resolve()
-    coco_img_dir = Path(args.imgroot).resolve() #('images')
+    coco_img_dir = coco_dir.joinpath("Labelled Images") #('images')
     coco_img_split_dir = coco_img_dir #coco_img_dir.joinpath(SPLIT2DIR[args.split])
 
     dataset_name = 'COCO'

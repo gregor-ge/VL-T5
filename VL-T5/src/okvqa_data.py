@@ -241,7 +241,7 @@ class VQAFineTuneDataset(Dataset):
                 out_dict['all_answers'] = [a['answer'] for a in answers]
 
                 prompt = self.args.aprompt if self.args.aprompt else "{}"
-                target_ids = self.tokenizer.encode(prompt.format(answer), max_length=10, truncation=True)
+                target_ids = self.tokenizer.encode(prompt.format(answer))
 
                 out_dict['target_ids'] = torch.LongTensor(target_ids)
                 out_dict['target_length'] = len(target_ids)
