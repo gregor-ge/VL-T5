@@ -7,13 +7,38 @@ from types import MethodType
 
 from PIL import Image
 
-from detectron2_proposal_maxnms import collate_fn, extract, NUM_OBJECTS, DIM
 from torch.utils.data import Dataset, DataLoader
 import cv2
 from tqdm import tqdm
 from pathlib import Path
 import argparse
 import numpy as np
+
+MIN_BOXES = 36
+MAX_BOXES = 36
+NUM_OBJECTS = 36
+DIM = 2560
+
+def collate_fn(batch):
+    img_ids = []
+    imgs = []
+    paths = []
+
+    for i, entry in enumerate(batch):
+        img_ids.append(entry['img_id'])
+        imgs.append(entry['img'])
+        try:
+            paths.append(entry["img_path"])
+        except KeyError:
+            continue
+
+    batch_out = {}
+    batch_out['img_ids'] = img_ids
+    batch_out['imgs'] = imgs
+    batch_out["img_path"] = paths
+
+    return batch_out
+
 
 class COCODataset(Dataset):
     def __init__(self, image_dir):
@@ -28,7 +53,7 @@ class COCODataset(Dataset):
 
     def __getitem__(self, idx):
         image_path = self.image_path_list[idx]
-        image_id = image_path.name  #stem
+        image_id = image_path.stem
 
         img = cv2.imread(str(image_path))
 
@@ -98,11 +123,12 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--batchsize', default=32, type=int, help='batch_size')
-    parser.add_argument('--cocoroot', type=str, default=r'D:\Research\projects\misrik\VL-T5\datasets\harmemes')
+    parser.add_argument('--cocoroot', type=str, default=r'D:\Research\projects\misrik\VL-T5\datasets\MultiOFF_Dataset')
+    parser.add_argument('--imgroot', type=str, default=r'D:\Research\projects\misrik\VL-T5\datasets\MultiOFF_Dataset')
     parser.add_argument('--split', type=str, default='all', choices=['train', 'valid', 'test', 'all'])
-    parser.add_argument("--clip", type=str, default="RN101")
+    parser.add_argument("--clip", type=str, default="RN50x4")
     parser.add_argument('--clippool', default=6, type=int)
-    parser.add_argument('--download_root', type=str, default="")
+    parser.add_argument('--download_root', type=str, default=r'D:\Research\projects\misrik\VL-T5\datasets\MultiOFF_Dataset')
     args = parser.parse_args()
 
     # SPLIT2DIR = {
@@ -112,7 +138,7 @@ if __name__ == "__main__":
     # }
 
     coco_dir = Path(args.cocoroot).resolve()
-    coco_img_dir = coco_dir.joinpath("images") #('images')
+    coco_img_dir = Path(args.imgroot).resolve() #('images')
     coco_img_split_dir = coco_img_dir #coco_img_dir.joinpath(SPLIT2DIR[args.split])
 
     dataset_name = 'COCO'
@@ -129,15 +155,9 @@ if __name__ == "__main__":
     dataloader = DataLoader(dataset, batch_size=args.batchsize,
                             shuffle=False, collate_fn=collate_fn, num_workers=4)
 
-    if args.clip:
-        output_fname = out_dir.joinpath(f'{args.split}_clip-{args.clip}-{args.clippool}.h5')
-    else:
-        output_fname = out_dir.joinpath(f'{args.split}_obj{NUM_OBJECTS}.h5')
+    output_fname = out_dir.joinpath(f'{args.split}_clip-{args.clip}-{args.clippool}.h5')
     print('features will be saved at', output_fname)
 
     desc = f'{dataset_name}_{args.split}_{(NUM_OBJECTS, DIM)}'
 
-    if args.clip:
-        extract_clip(output_fname, dataloader, desc, args.clip, args.clippool, args)
-    else:
-        extract(output_fname, dataloader, desc)
+    extract_clip(output_fname, dataloader, desc, args.clip, args.clippool, args)

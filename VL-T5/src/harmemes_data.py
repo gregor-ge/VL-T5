@@ -1,3 +1,5 @@
+import csv
+
 from torch.utils.data import DataLoader, Dataset, Sampler
 from pathlib import Path
 from collections import defaultdict
@@ -10,29 +12,23 @@ import math
 from tqdm import tqdm
 import torch
 import numpy as np
-
-
 from torch.utils.data.distributed import DistributedSampler
-
 
 import transformers
 from transformers import T5TokenizerFast, BartTokenizer
 from tokenization import VLT5TokenizerFast
 
-from qa_answer_table import AnswerTable
 
 
 project_dir = Path(__file__).resolve().parent.parent  # VLT5
 workspace_dir = project_dir.parent
 dataset_dir = workspace_dir.joinpath('datasets/').resolve()
-coco_dir = dataset_dir.joinpath('COCO')
-vg_dir = dataset_dir.joinpath('VG')
-coco_img_dir = coco_dir.joinpath('images/')
-coco_feature_dir = coco_dir.joinpath('features')
-gqa_dir = dataset_dir.joinpath('GQA')
+harmemes_dir = dataset_dir.joinpath("harmemes")
+harmemes_feature_dir = harmemes_dir.joinpath("features")
+harmemes_split_dir = harmemes_dir.joinpath("annotations")
 
 
-class GQAFineTuneDataset(Dataset):
+class HarmemesFineTuneDataset(Dataset):
     def __init__(self, split='train,valid', raw_dataset=None, rank=-1, topk=-1, verbose=True, args=None, mode='train'):
         super().__init__()
 
@@ -73,15 +69,20 @@ class GQAFineTuneDataset(Dataset):
         self.img_ids_to_source = {}
         data_info_dicts = []
         for source in self.sources:
-            data_info_path = dataset_dir.joinpath(f'GQA/{source}.json')
-            with open(data_info_path) as f:
-                _data_info_dicts = json.load(f)
-                # source_img_ids.append([d['img_id'] for d in _data_info_dicts])
-                for _d in _data_info_dicts:
-                    self.img_ids_to_source[_d['img_id']] = source
-                    _d['source'] = source
+            _data_info_dicts = []
+            data_info_path = harmemes_split_dir.joinpath(f'{source}.jsonl')
+            with open(data_info_path, encoding="utf-8") as f:
+                for row in f.readlines():
+                    row = json.loads(row)
+                    row["img_id"] = row.pop("image")
+                    row["sent"] = row.pop("text").replace(r"\n", " ")
+                    row["question_id"] = row.pop("id")
+                    row["label"] = row["labels"][0]
 
-                data_info_dicts.extend(_data_info_dicts)
+                    self.img_ids_to_source[row['img_id']] = source
+                    row['source'] = source
+                    _data_info_dicts.append(row)
+            data_info_dicts.extend(_data_info_dicts)
             if self.verbose:
                 print(f"Loaded {len(_data_info_dicts)} data from", source)
 
@@ -103,18 +104,7 @@ class GQAFineTuneDataset(Dataset):
 
         self.n_boxes = args.n_boxes
 
-        self.source_to_featname = {
-            'train': 'others',
-            'valid': 'others',
-            'submit': 'others',
-
-            'testdev': 'testdev'
-        }
-
-        self.featname_to_h5 = {
-            'others': vg_dir.joinpath(f'features/vg_gqa_{args.feature_type}.h5'),
-            'testdev': gqa_dir.joinpath(f'features/gqa_testdev_{args.feature_type}.h5'),
-        }
+        self.featname_to_h5 = harmemes_feature_dir.joinpath(f'all_{args.feature_type}.h5')
 
 
     def __len__(self):
@@ -135,22 +125,17 @@ class GQAFineTuneDataset(Dataset):
             img_id = datum['img_id']
             out_dict['img_id'] = img_id
 
-            source = self.img_ids_to_source[img_id]
-
-            featname = self.source_to_featname[source]
-
             # f = self.source_to_h5[source]
-            f = self.featname_to_h5[featname]
+            f = self.featname_to_h5
 
             if isinstance(f, Path):
                 # path = self.data_source_to_h5_path[source]
                 f = h5py.File(f, 'r')
                 # self.split_to_h5_features[split_i] = f
                 # self.source_to_h5[source] = f
-                self.featname_to_h5[featname] = f
+                self.featname_to_h5 = f
 
-            feats = np.zeros(shape=(self.n_boxes, 2048), dtype=np.float32)
-            f[f'{img_id}/features'].read_direct(feats)
+            feats = f[f'{img_id}/features'][()]
             feats = torch.from_numpy(feats)
             out_dict['vis_feats'] = feats
 
@@ -160,12 +145,12 @@ class GQAFineTuneDataset(Dataset):
             boxes = f[f'{img_id}/boxes'][()]  # (x1, y1, x2, y2)
             boxes[:, (0, 2)] /= img_w
             boxes[:, (1, 3)] /= img_h
-            np.testing.assert_array_less(boxes, 1+1e-5)
-            # np.testing.assert_array_less(boxes, 1+5e-2)
-            np.testing.assert_array_less(-boxes, 0+1e-5)
+            # np.testing.assert_array_less(boxes, 1+1e-5)
+            # # np.testing.assert_array_less(boxes, 1+5e-2)
+            # np.testing.assert_array_less(-boxes, 0+1e-5)
             boxes = torch.from_numpy(boxes)
 
-            boxes.clamp_(min=0.0, max=1.0)
+            boxes.float().clamp_(min=0.0, max=1.0)
 
             out_dict['boxes'] = boxes
 
@@ -173,8 +158,8 @@ class GQAFineTuneDataset(Dataset):
         # caption = datum['caption']
         sent = datum['sent']
 
-
-        input_ids = self.tokenizer.encode(f'gqa: {sent}', max_length=20, truncation=True)
+        prompt = self.args.qprompt if self.args.qprompt else "harmemes: {}"
+        input_ids = self.tokenizer.encode(prompt.format(sent), max_length=100, truncation=True)
         question_id = datum['question_id']
         out_dict['question_id'] = question_id
 
@@ -185,41 +170,11 @@ class GQAFineTuneDataset(Dataset):
         if 'label' in datum:
             label = datum['label']
             out_dict['label'] = label
-
-            # https://github.com/airsplay/lxmert/blob/master/src/pretrain/lxmert_pretrain.py#L191
-            answers = []
-            scores = []
-            for a, s in label.items():
-                answers.append(a)
-                scores.append(s)
-
-            score_sum = sum(scores)
-
-            if score_sum == 0:
-                answer = ''
-                score = 0.
-            else:
-                prob = [score / score_sum for score in scores]
-                choice = np.random.multinomial(1, prob).argmax()
-                answer = answers[choice]
-                score = scores[choice]
-                assert len(answer) > 0, (sent, label, choice, answer)
-
+            answer = label
             out_dict['answer'] = answer
-            out_dict['score'] = score
-            out_dict['all_answers'] = answers
 
-            if sum(scores) > 0:
-                best_answers = []
-                best_score = max(scores)
-                for a, s in label.items():
-                    if s == best_score and s > 0:
-                        best_answers.append(a)
-                out_dict['best_answers_tokenized'] = [self.tokenizer.encode(a) for a in best_answers]
-            else:
-                out_dict['best_answers_tokenized'] = [[]]
-
-            target_ids = self.tokenizer.encode(answer)
+            prompt = self.args.aprompt if self.args.aprompt else "{}"
+            target_ids = self.tokenizer.encode(prompt.format(answer))
 
             out_dict['target_ids'] = torch.LongTensor(target_ids)
             out_dict['target_length'] = len(target_ids)
@@ -330,11 +285,9 @@ def get_loader(args, split='train', mode='train',
     if verbose is None:
         verbose = (gpu == 0)
 
-    _dset = GQADataset(split, verbose)
 
-    dataset = GQAFineTuneDataset(
+    dataset = HarmemesFineTuneDataset(
         split,
-        raw_dataset=_dset,
         rank=gpu,
         topk=topk,
         verbose=verbose,
@@ -360,13 +313,14 @@ def get_loader(args, split='train', mode='train',
             collate_fn=dataset.collate_fn,
             drop_last=False)
 
-    loader.evaluator = GQAEvaluator(_dset)
+    _dset = HarmemesDataset(split, verbose)
+    loader.evaluator = HarmemesEvaluator(_dset)
     loader.task = 'gqa'
 
     return loader
 
 
-class GQADataset:
+class HarmemesDataset:
     """
     A GQA data example in json file:
     {
@@ -386,7 +340,16 @@ class GQADataset:
         # Loading datasets to data
         self.data = []
         for split in self.splits:
-            self.data.extend(json.load(open(gqa_dir.joinpath("%s.json" % split))))
+            _data_info_dicts = []
+            data_info_path = harmemes_split_dir.joinpath(f'{split}.jsonl')
+            with open(data_info_path, encoding="utf-8") as f:
+                for row in f.readlines():
+                    row = json.loads(row)
+                    row["img_id"] = row.pop("image")
+                    row["sent"] = row.pop("text").replace(r"\n", " ")
+                    row["question_id"] = row.pop("id")
+                    row["label"] = row["labels"][0]
+                    self.data.append(row)
         if verbose:
             print("Load %d data from split(s) %s." %
                   (len(self.data), self.name))
@@ -397,33 +360,59 @@ class GQADataset:
             for datum in self.data
         }
 
-        # Answers
-        self.ans2label = json.load(open(gqa_dir.joinpath("trainval_ans2label.json")))
-        self.label2ans = json.load(open(gqa_dir.joinpath("trainval_label2ans.json")))
-        assert len(self.ans2label) == len(self.label2ans)
-        for ans, label in self.ans2label.items():
-            assert self.label2ans[label] == ans
-
     @property
     def num_answers(self):
-        return len(self.ans2label)
+        return 3
 
     def __len__(self):
         return len(self.data)
 
 
-class GQAEvaluator:
-    def __init__(self, dataset: GQADataset):
+class HarmemesEvaluator:
+    def __init__(self, dataset: HarmemesDataset):
         self.dataset = dataset
 
     def evaluate(self, quesid2ans: dict):
-        score = 0.
+        hit = defaultdict(lambda : 0)
+        total = defaultdict(lambda : 0)
+        correct = defaultdict(lambda : 0)
+        labels = ["not harmful", "very harmful", "somewhat harmful"]
         for quesid, ans in quesid2ans.items():
             datum = self.dataset.id2datum[quesid]
-            label = datum['label']
-            if ans in label:
-                score += label[ans]
-        return score / len(quesid2ans)
+            true_label = datum['label'].lower()
+            for label in labels:
+                if label in ans:
+                    hit[label] += 1
+                    if label == true_label:
+                        correct[label] += 1
+            total[true_label] += 1
+
+        result = {"precision": {}, "recall": {}, "f1": {}}
+        for label in labels:
+            try:
+                precision = correct[label] / hit[label]
+            except ZeroDivisionError:
+                precision = 0
+            try:
+                recall = correct[label] / total[label]
+            except ZeroDivisionError:
+                recall = 0
+            try:
+                f1 = 2*precision*recall / (precision+recall)
+            except ZeroDivisionError:
+                f1 = 0
+            result["precision"][label] = precision
+            result["recall"][label] = recall
+            result["f1"][label] = f1
+        makro_f1 = sum(result["f1"][label] for label in labels) / len(labels)
+        sum_total = sum(total.values())
+        micro_f1 = sum(result["f1"][label] * total[label]/sum_total for label in labels)
+        acc = sum(correct[label]/sum_total for label in labels)
+        result["makro_f1"] = makro_f1
+        result["micro_f1"] = micro_f1
+        result["accuracy"] = acc
+        result["nan_label"] = 1 - sum(hit[label]/sum_total for label in labels)
+        return result
 
     def dump_result(self, quesid2ans: dict, path):
         """

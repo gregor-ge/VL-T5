@@ -91,9 +91,9 @@ class NLVRFineTuneDataset(Dataset):
             num_added_toks = self.tokenizer.add_special_tokens(special_tokens_dict)
 
         self.source_to_h5 = {
-            'train': nlvr_feature_dir.joinpath(f'train_obj36.h5'),
-            'valid': nlvr_feature_dir.joinpath(f'valid_obj36.h5'),
-            'test': nlvr_feature_dir.joinpath(f'test_obj36.h5'),
+            'train': nlvr_feature_dir.joinpath(f'train_{args.feature_type}.h5'),
+            'valid': nlvr_feature_dir.joinpath(f'valid_{args.feature_type}.h5'),
+            'test': nlvr_feature_dir.joinpath(f'test_{args.feature_type}.h5'),
         }
 
 

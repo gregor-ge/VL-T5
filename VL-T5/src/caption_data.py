@@ -138,8 +138,8 @@ class COCOCaptionFineTuneDataset(Dataset):
 
         if self.args.max_n_boxes == 36:
             self.source_to_h5.update({
-                'train2014': coco_dir.joinpath('features').joinpath('train2014_obj36.h5'),
-                'val2014': coco_dir.joinpath('features').joinpath('val2014_obj36.h5'),
+                'train2014': coco_dir.joinpath('features').joinpath(f'train2014_{args.feature_type}.h5'),
+                'val2014': coco_dir.joinpath('features').joinpath(f'val2014_{args.feature_type}.h5'),
             })
 
 

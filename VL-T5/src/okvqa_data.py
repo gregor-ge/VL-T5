@@ -118,15 +118,15 @@ class VQAFineTuneDataset(Dataset):
 
         self.n_boxes = args.n_boxes
         self.source_to_h5 = {
-            'train': coco_feature_dir.joinpath(f'train2014_obj36.h5'),
-            'minival': coco_feature_dir.joinpath(f'val2014_obj36.h5'),
-            'nominival': coco_feature_dir.joinpath(f'val2014_obj36.h5'),
-            'test': coco_feature_dir.joinpath(f'test2015_obj36.h5'),
+            'train': coco_feature_dir.joinpath(f'train2014_{args.feature_type}.h5'),
+            'minival': coco_feature_dir.joinpath(f'val2014_{args.feature_type}.h5'),
+            'nominival': coco_feature_dir.joinpath(f'val2014_{args.feature_type}.h5'),
+            'test': coco_feature_dir.joinpath(f'test2015_{args.feature_type}.h5'),
 
-            'vg': dataset_dir.joinpath('VG/features').joinpath('vg_gqa_obj36.h5'),
+            'vg': dataset_dir.joinpath('VG/features').joinpath(f'vg_gqa_{args.feature_type}.h5'),
 
-            'train2014': coco_feature_dir.joinpath(f'train2014_obj36.h5'),
-            'val2014': coco_feature_dir.joinpath(f'val2014_obj36.h5'),
+            'train2014': coco_feature_dir.joinpath(f'train2014_{args.feature_type}.h5'),
+            'val2014': coco_feature_dir.joinpath(f'val2014_{args.feature_type}.h5'),
         }
 
     def __len__(self):

@@ -18,7 +18,7 @@ from pprint import pprint
 
 from param import parse_args
 
-from multioff_data import get_loader
+from harmemes_data import get_loader
 from utils import LossMeter, set_global_logging_level
 import wandb
 
@@ -124,14 +124,14 @@ class Trainer(TrainerBase):
 
             if 't5' in self.args.backbone:
                 if self.args.use_vision:
-                    project_name = "VLT5_MultiOff"
+                    project_name = "VLT5_Harmemes"
                 else:
-                    project_name = "T5_MultiOff"
+                    project_name = "T5_Harmemes"
             elif 'bart' in self.args.backbone:
                 if self.args.use_vision:
-                    project_name = "VLBart_MultiOff"
+                    project_name = "VLBart_Harmemes"
                 else:
-                    project_name = "Bart_MultiOff"
+                    project_name = "Bart_Harmemes"
 
             wandb.init(project=project_name)
             wandb.run.name = self.args.run_name
@@ -262,7 +262,7 @@ class Trainer(TrainerBase):
 
                 # Validation
                 valid_dict = self.evaluate(self.val_loader)
-                valid_score = valid_dict["f1"]["offensive"]
+                valid_score = valid_dict["makro_f1"]
                 if valid_score > best_valid:
                     best_valid = valid_score
                     best_epoch = epoch
@@ -396,9 +396,9 @@ def main_worker(gpu, args):
         trainer.predict(test_loader, dump_path=dump_path)
 
         if 't5' in args.backbone:
-            project_name = "VLT5_MultiOff"
+            project_name = "VLT5_Harmemes"
         elif 'bart' in args.backbone:
-            project_name = "VLBart_MultiOff"
+            project_name = "VLBart_Harmemes"
 
         wandb.init(project=project_name)
         wandb.run.name = args.run_name

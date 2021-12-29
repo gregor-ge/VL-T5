@@ -383,7 +383,7 @@ class MultiOffEvaluator:
             datum = self.dataset.id2datum[quesid]
             true_label = datum['label'].lower()
             for label in labels:
-                if ans in label:
+                if label in ans:
                     hit[label] += 1
                     if label == true_label:
                         correct[label] += 1
@@ -408,9 +408,12 @@ class MultiOffEvaluator:
             result["f1"][label] = f1
         makro_f1 = sum(result["f1"][label] for label in labels) / len(labels)
         sum_total = sum(total.values())
-        mikro_f1 = sum(result["f1"][label] * total[label]/sum_total for label in labels)
+        micro_f1 = sum(result["f1"][label] * total[label]/sum_total for label in labels)
+        acc = sum(correct[label]/sum_total for label in labels)
         result["makro_f1"] = makro_f1
-        result["mikro_f1"] = mikro_f1
+        result["micro_f1"] = micro_f1
+        result["accuracy"] = acc
+        result["nan_label"] = 1 - sum(hit[label]/sum_total for label in labels)
         return result
 
     def dump_result(self, quesid2ans: dict, path):

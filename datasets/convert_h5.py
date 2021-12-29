@@ -2,13 +2,21 @@ import h5py
 from collections import defaultdict
 import numpy as np
 from tqdm import tqdm
-import pickle
+import argparse
 
 if __name__ == "__main__":
-    in_fs = ["COCO/features/resplit_val_obj36.h5","COCO/features/train2014_obj36.h5", "COCO/features/val2014_obj36.h5", "VG/features/vg_gqa_obj36.h5"]
-    out_fs = ["COCO/features/converted_resplit_val_obj36.h5","COCO/features/converted_train2014_obj36.h5", "COCO/features/converted_val2014_obj36.h5", "VG/features/converted_vg_gqa_obj36.h5"]
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--data_dir', type=str, default='/ukp-storage-1/geigle/misrik/VLT5/datasets/COCO/features/')
+    parser.add_argument('--files', type=str, default='val2014-RN50x16-6.h5')
+
+    args = parser.parse_args()
+    in_fs = args.files.split(",")
+    out_fs = ["converted_"+f for f in in_fs]
 
     for in_f, out_f in zip(in_fs, out_fs):
+        print(in_f, out_f)
+        in_f = args.data_dir + in_f
+        out_f = args.data_dir + out_f
         f = h5py.File(in_f, 'r', )
 
         len_data = len(f.keys())
@@ -22,4 +30,5 @@ if __name__ == "__main__":
                         o.create_dataset(k, data=np.zeros((len_data,)+v[()].shape), dtype=v[()].dtype)
                     o[k][i] = v[()]
             o.create_dataset("img_id", data=out_d)
+
 

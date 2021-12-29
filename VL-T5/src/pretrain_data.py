@@ -294,19 +294,19 @@ class PretrainDataset(Dataset):
         print("# examples:", len(data), " rank ", rank)
 
         self.source_to_h5 = {
-            'mscoco_resplit_train_train2014': coco_dir.joinpath('features').joinpath('train2014_obj36.h5'),
-            'mscoco_resplit_train_val2014': coco_dir.joinpath('features').joinpath('val2014_obj36.h5'),
-            'mscoco_resplit_val': coco_dir.joinpath('features').joinpath('resplit_val_obj36.h5'),
-            'vgnococo': vg_dir.joinpath('features').joinpath('vg_gqa_obj36.h5'),
+            'mscoco_resplit_train_train2014': coco_dir.joinpath('features').joinpath(f'train2014_{args.feature_type}.h5'),
+            'mscoco_resplit_train_val2014': coco_dir.joinpath('features').joinpath(f'val2014_{args.feature_type}.h5'),
+            'mscoco_resplit_val': coco_dir.joinpath('features').joinpath(f'resplit_val_{args.feature_type}.h5'),
+            'vgnococo': vg_dir.joinpath('features').joinpath(f'vg_gqa_{args.feature_type}.h5'),
 
         }
 
         if args.preload:
             self.source_to_h5 = {
-                'mscoco_resplit_val': coco_dir.joinpath('features').joinpath('converted_resplit_val_obj36.h5'),
-                'mscoco_resplit_train_train2014': coco_dir.joinpath('features').joinpath('converted_train2014_obj36.h5'),
-                'mscoco_resplit_train_val2014': coco_dir.joinpath('features').joinpath('converted_val2014_obj36.h5'),
-                'vgnococo': vg_dir.joinpath('features').joinpath('converted_vg_gqa_obj36.h5'),
+                'mscoco_resplit_val': coco_dir.joinpath('features').joinpath(f'converted_resplit_val_{args.feature_type}.h5'),
+                'mscoco_resplit_train_train2014': coco_dir.joinpath('features').joinpath(f'converted_train2014_{args.feature_type}.h5'),
+                'mscoco_resplit_train_val2014': coco_dir.joinpath('features').joinpath(f'converted_val2014_{args.feature_type}.h5'),
+                'vgnococo': vg_dir.joinpath('features').joinpath(f'converted_vg_gqa_{args.feature_type}.h5'),
 
             }
             unique_ids = {k: set() for k in self.source_to_h5.keys()}
